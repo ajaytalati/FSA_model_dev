@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+LaTex_docs/*.aux
+LaTex_docs/*.log
+LaTex_docs/*.out
+LaTex_docs/*.toc
+LaTex_docs/*.pdf
+LaTex_docs/*.b64
+fsa_simulation.png

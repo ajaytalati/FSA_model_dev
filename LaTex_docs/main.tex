@@ -1,0 +1,29 @@
+\documentclass[11pt,a4paper]{article}
+
+\input{preamble.tex}
+
+\title{Graduate Lecture Notes: The FSA-v2 Physiological Model\\
+\large A Standalone Sandbox Guide}
+\author{FSA Model Development Team}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This document provides a comprehensive graduate-level introduction to the FSA-v2 (Fitness-Fatigue-Amplitude) physiological model. We detail the biological foundations based on the Banister impulse-response framework, the mathematical formulation using Stochastic Differential Equations (SDEs) in a reparametrized form, and the numerical implementation within a JAX-based sandbox environment. These notes are designed for students and researchers aiming to develop, tune, and validate the FSA model independently of a larger inference pipeline.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\input{sections/01_physiology.tex}
+\input{sections/02_mathematics.tex}
+\input{sections/03_implementation.tex}
+\input{sections/05_stability.tex}
+\input{sections/06_inference.tex}
+\input{sections/04_sandbox_guide.tex}
+
+\input{sections/appendix.tex}
+\end{document}

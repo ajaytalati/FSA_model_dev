@@ -1,0 +1,30 @@
+\section{Identifiability and Stability Analysis}
+
+As a graduate-level model, FSA-v2 has been subjected to rigorous mathematical validation to ensure that parameter estimation is well-posed and that the latent dynamics are stable.
+
+\subsection{Structural Identifiability}
+
+Identifiability concerns whether the model parameters can be uniquely recovered from the observation data. For the FSA-v2 model, the Fisher Information Matrix (FIM) was calculated for a one-day window of data.
+
+\begin{definition}[Fisher Information Matrix]
+The FIM $\mathcal{I}(\thetadyn)$ is defined as the expected value of the observed information:
+\begin{equation}
+    \mathcal{I}(\thetadyn) = \mathbb{E} \left[ \nabla_{\thetadyn} \log p(y_{1:n} \mid \thetadyn) \nabla_{\thetadyn} \log p(y_{1:n} \mid \thetadyn)^T \right]
+\end{equation}
+\end{definition}
+
+Numerical rank analysis of the FIM for the FSA-v2 model confirmed that the 30-dimensional parameter vector is locally identifiable. The G1-reparametrization (see Section 2.3) was essential to resolve rank deficiencies that existed in earlier versions of the model, specifically by rotating weakly-identified parameter pairs into strongly-identified primary gains and residual couplings.
+
+\subsection{Exponential Ergodicity and Lyapunov Stability}
+
+To ensure the SDEs do not diverge, we established exponential ergodicity using a quadratic Lyapunov function $V(y)$. 
+
+\begin{theorem}[Lyapunov Stability]
+For the FSA-v2 dynamics, there exists a function $V: \mathbb{R}^3 \to [1, \infty)$ and constants $c_1, c_2 > 0$ such that the generator $\mathcal{L}$ of the SDE satisfies:
+\begin{equation}
+    \mathcal{L}V(y) \le -c_1 V(y) + c_2
+\end{equation}
+This condition, combined with the non-degeneracy of the diffusion matrix in the interior of the domain, ensures that the process $(B(t), F(t), A(t))$ converges exponentially fast to a unique stationary distribution.
+\end{theorem}
+
+The Stuart-Landau oscillator in the $A$ component provides intrinsic damping (the $-\eta A^3$ term), while the Jacobi and CIR diffusion terms naturally vanish at the boundaries, confining the process to a physically meaningful domain.

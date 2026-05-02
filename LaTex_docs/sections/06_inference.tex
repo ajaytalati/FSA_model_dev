@@ -1,0 +1,21 @@
+\section{The SMC${}^2$ Inference Framework}
+
+The standalone FSA sandbox is designed to support development for the SMC${}^2$ algorithm, a state-of-the-art method for Bayesian inference in state-space models where both parameters and latent states are unknown.
+
+\subsection{Sequential Monte Carlo in Two Layers}
+
+The algorithm (Chopin et al., 2013) employs two nested layers of particle filtering:
+\begin{enumerate}
+    \item \textbf{Outer Filter (Parameter Space):} A tempered SMC filter over the parameter vector $\thetadyn$. Each particle in the outer filter represents a hypothesis for the static physiological parameters.
+    \item \textbf{Inner Filter (State Space):} For each parameter particle, a bootstrap particle filter (BPF) estimates the latent trajectories $(B_{1:n}, F_{1:n}, A_{1:n})$.
+\end{enumerate}
+
+The sandbox artifacts (\texttt{estimation.py}) provide the JAX-native transition kernels and observation weights required to execute these filters with high efficiency.
+
+\subsection{Parameter Resampling and MCMC Moves}
+
+To prevent particle degeneracy in the parameter space, SMC${}^2$ uses Markov Chain Monte Carlo (MCMC) moves. The JAX-native implementation in the main repository uses Hamiltonian Monte Carlo (HMC) with a mass matrix estimated from the particle cloud. The sandbox allows researchers to tune the priors and dynamics to ensure that the HMC transitions are well-mixed and that the posterior surface is sufficiently smooth.
+
+\subsection{Closed-Loop Control under Uncertainty}
+
+The \texttt{ControlSpec} enables Model Predictive Control (MPC) where the optimization is performed over the posterior mean of the parameters. The cost functional $J(\theta)$ is evaluated by rolling out the SDE under common random numbers (CRN), ensuring a low-variance gradient for the schedule optimization. The standalone repo facilitates the design of new cost functions (e.g., maximizing autonomic amplitude while minimizing fatigue) before they are deployed in the full rolling-window MPC pipeline.
