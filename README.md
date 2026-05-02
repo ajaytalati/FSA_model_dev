@@ -2,12 +2,21 @@
 
 Standalone sandbox for the FSA-v2 (Banister-coupled) physiological SDE model.
 
+## Features
+
+- **Pure JAX Dynamics:** Highly-optimised SDE drift and diffusion implementation.
+- **Independent Simulation:** Capable of running forward rollouts without the full SMC² framework.
+- **SMC² Artifacts:** Includes `EstimationModel` and `ControlSpec` (supported by local stubs).
+- **Academic Documentation:** 12-page graduate-level lecture notes on the model's biology and math.
+- **Identifiability & Stability:** Built-in verification for FIM rank and Lyapunov stability.
+
 ## Structure
 
 - `models/fsa_high_res/`: The core model implementation (drift, diffusion, priors, cost functions).
 - `simulator/`: A generic, JAX-native SDE simulation framework.
-- `smc2fc/`: Lightweight stubs to allow the model to be developed independently of the main SMC² repository.
-- `tests/`: Sanity tests for physics and SMC² artifact compatibility.
+- `smc2fc/`: Lightweight stubs to allow the model to be developed independently.
+- `LaTex_docs/`: Source and PDF for graduate lecture notes.
+- `tests/`: Sanity tests for physics and artifact compatibility.
 - `examples/`: Example scripts showing how to run simulations.
 
 ## Usage
@@ -21,6 +30,14 @@ Standalone sandbox for the FSA-v2 (Banister-coupled) physiological SDE model.
    ```bash
    PYTHONPATH=. pytest tests/
    ```
+
+## Documentation
+
+The graduate lecture notes can be found in `LaTex_docs/main.pdf`. To recompile:
+```bash
+cd LaTex_docs
+pdflatex main.tex
+```
 
 ## Porting back to SMC2 Repo
 
