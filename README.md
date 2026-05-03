@@ -1,22 +1,24 @@
 # FSA_model_dev
 
-Standalone sandbox for the FSA-v2 (Banister-coupled) physiological SDE model.
+Standalone sandbox for the FSA-v3 (Bimodal Training Extension) physiological SDE model.
 
 ## Features
 
+- **4D State Space:** Models Fitness ($B$), Strength ($S$), Fatigue ($F$), and Autonomic Amplitude ($A$).
+- **Bimodal Training:** Concurrent support for Aerobic ($\Phi_B$) and Strength ($\Phi_S$) stimuli.
+- **Unified Fatigue Pool:** A single systemic fatigue state driven by both modalities.
 - **Pure JAX Dynamics:** Highly-optimised SDE drift and diffusion implementation.
-- **Independent Simulation:** Capable of running forward rollouts without the full SMC² framework.
-- **SMC² Artifacts:** Includes `EstimationModel` and `ControlSpec` (supported by local stubs).
-- **Academic Documentation:** 12-page graduate-level lecture notes on the model's biology and math.
-- **Identifiability & Stability:** Built-in verification for FIM rank and Lyapunov stability.
+- **SMC² Artifacts:** Includes 4D-compatible `EstimationModel` and 2D-control `ControlSpec`.
+- **Academic Documentation:** Graduate-level lecture notes on the model's biology and math, now including FSA-v3.
+- **Identifiability & Stability:** Built-in verification for FIM rank and Lyapunov stability for the 4D system.
 
 ## Structure
 
 - `models/fsa_high_res/`: The core model implementation (drift, diffusion, priors, cost functions).
 - `simulator/`: A generic, JAX-native SDE simulation framework.
 - `smc2fc/`: Lightweight stubs to allow the model to be developed independently.
-- `LaTex_docs/`: Source and PDF for graduate lecture notes.
-- `tests/`: Sanity tests for physics and artifact compatibility.
+- `LaTex_docs/`: Source for graduate lecture notes.
+- `tests/`: Sanity tests for physics, identifiability, and artifact compatibility.
 - `examples/`: Example scripts showing how to run simulations.
 
 ## Usage
