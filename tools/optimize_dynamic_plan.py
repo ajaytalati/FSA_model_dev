@@ -24,8 +24,8 @@ def run_study():
         
         # Scale anchors: 1 per week (min 8)
         n_anchors = max(8, int(T / 7))
-        # Stricter fatigue budget: lam_barrier=100.0
-        spec = build_control_spec(T_total_days=T, n_inner=64, n_anchors=n_anchors, 
+        # Increase n_inner to 64 for a smoother gradient
+        spec = build_control_spec(T_total_days=T, n_inner=16, n_anchors=n_anchors, 
                                   lam_barrier=100.0, seed=123)
         
         theta = jnp.zeros(spec.theta_dim, dtype=jnp.float64)
@@ -33,7 +33,7 @@ def run_study():
         # Robust optimization settings
         lr = 0.0005 
         l2_reg = 0.1 # Stronger reg to keep plan stable under high barrier
-        n_iters = 2000
+        n_iters = 50
         
         best_theta = theta
         min_cost = jnp.inf
@@ -82,26 +82,33 @@ def run_study():
         t_grid = jnp.arange(spec.n_steps) * spec.dt
         
         # Plotting
-        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+        fig, axes = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
         
-        # Plot 1: Latent States
+        # Plot 1: Capacities
         axes[0].plot(t_grid, trajectory[:, 0], 'b-', label='B (Fitness)', alpha=0.9)
         axes[0].plot(t_grid, trajectory[:, 1], 'g-', label='S (Strength)', alpha=0.9)
-        axes[0].plot(t_grid, trajectory[:, 2], 'r--', label='Fatigue (F)', alpha=0.5)
         axes[0].plot(t_grid, trajectory[:, 3], 'k-', label='Autonomic (A)', linewidth=1.5)
-        axes[0].axhline(0.40, color='r', linestyle=':', label='F_max limit', alpha=0.8)
-        axes[0].set_ylabel('State Value')
-        axes[0].set_title(f'Optimal Bimodal Plan: {name} Horizon ({int(T)} days)')
-        axes[0].legend(loc='upper left', fontsize='small', ncol=2)
+        axes[0].set_ylabel('Capacity / Amplitude')
+        axes[0].set_title(f'FSA-v4 Variable-Dose Optimal Plan: {name} Horizon ({int(T)} days)')
+        axes[0].legend(loc='upper left', fontsize='small', ncol=3)
         axes[0].grid(True, alpha=0.2, linestyle='--')
         
-        # Plot 2: Stimulus Schedules
-        axes[1].plot(t_grid, optimal_phi[:, 0], 'b-', alpha=0.7, label='Aerobic ($\Phi_B$)')
-        axes[1].plot(t_grid, optimal_phi[:, 1], 'g-', alpha=0.7, label='Strength ($\Phi_S$)')
-        axes[1].set_ylabel('Stimulus Rate')
-        axes[1].set_xlabel('Time (days)')
-        axes[1].legend(loc='upper left', fontsize='small')
+        # Plot 2: Fatigue and Sensitivities
+        axes[1].plot(t_grid, trajectory[:, 2], 'r-', label='Fatigue (F)', alpha=0.7)
+        axes[1].axhline(0.40, color='r', linestyle=':', label='F_max limit', alpha=0.8)
+        axes[1].plot(t_grid, trajectory[:, 4], 'm--', label='K_FB (Aerobic Sens.)')
+        axes[1].plot(t_grid, trajectory[:, 5], 'c--', label='K_FS (Strength Sens.)')
+        axes[1].set_ylabel('Fatigue / Sensitivity')
+        axes[1].legend(loc='upper left', fontsize='small', ncol=3)
         axes[1].grid(True, alpha=0.2, linestyle='--')
+
+        # Plot 3: Stimulus Schedules
+        axes[2].plot(t_grid, optimal_phi[:, 0], 'b-', alpha=0.7, label='Aerobic ($\Phi_B$)')
+        axes[2].plot(t_grid, optimal_phi[:, 1], 'g-', alpha=0.7, label='Strength ($\Phi_S$)')
+        axes[2].set_ylabel('Stimulus Rate')
+        axes[2].set_xlabel('Time (days)')
+        axes[2].legend(loc='upper left', fontsize='small')
+        axes[2].grid(True, alpha=0.2, linestyle='--')
         
         # Final visual Polish
         plt.tight_layout()

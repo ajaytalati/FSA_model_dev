@@ -1,12 +1,12 @@
 """
-version_3/models/fsa_high_res/simulation.py — FSA-v3 (Bimodal Training).
+version_4/models/fsa_high_res/simulation.py — FSA-v4 (Variable Dose).
 =========================================================================
 
-Extension of the FSA-v2 model to include Strength/Resistance Adaptation (S).
-  - **4D Latent State**: [B, S, F, A]
-  - **2D Control Input**: [Phi_B, Phi_S] (Aerobic and Strength stimulus)
-  - **Unified Fatigue**: Both stimuli contribute to a single fatigue pool.
-  - **New Observation**: VolumeLoad ~ N(beta_S·S - beta_F·F, sigma_VL²)
+Extension of the FSA-v3 model to include dynamic fatigue gains (Busso 2003).
+  - **6D Latent State**: [B, S, F, A, KFB, KFS]
+  - **2D Control Input**: [Phi_B, Phi_S]
+  - **Unified Fatigue**: dF = (KFB·Phi_B + KFS·Phi_S - ...) dt
+  - **Variable Dose**: Sensitivity KFi increases with training.
 """
 
 import math
@@ -51,20 +51,20 @@ def circadian_jax(t_days, phi=0.0):
 
 
 # =========================================================================
-# DRIFT — v3 Bimodal (dual Φ input)
+# DRIFT — v4 Variable Dose (6D state)
 # =========================================================================
 
 def _bin_lookup_2d(t_days, array_2d, dt_bin_days=DT_BIN_DAYS):
     k = int(t_days / dt_bin_days)
     k = max(0, min(k, array_2d.shape[0] - 1))
-    return array_2d[k]  # returns [Phi_B, Phi_S]
+    return array_2d[k]
 
 
 def drift(t, y, params, aux):
-    """Numpy v3 drift — G1-reparametrized. 4D state, 2D stimulus."""
-    (Phi_arr,) = aux  # Phi_arr is (N, 2)
+    """Numpy v4 drift — 6D state [B, S, F, A, KFB, KFS]."""
+    (Phi_arr,) = aux
     p = params
-    B = y[0]; S = y[1]; F = y[2]; A = y[3]
+    B, S, F, A, KFB, KFS = y[0], y[1], y[2], y[3], y[4], y[5]
 
     Phi_t = _bin_lookup_2d(t, Phi_arr)
     Phi_B, Phi_S = Phi_t[0], Phi_t[1]
@@ -73,29 +73,28 @@ def drift(t, y, params, aux):
     mu = (p['mu_0'] + p['mu_B'] * B + p['mu_S'] * S
           - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev)
 
-    a_factor_B = ((1.0 + p['epsilon_AB'] * A)
-                   / (1.0 + p['epsilon_AB'] * A_TYP))
+    a_factor_B = (1.0 + p['epsilon_AB'] * A) / (1.0 + p['epsilon_AB'] * A_TYP)
     dB = p['kappa_B'] * a_factor_B * Phi_B - B / p['tau_B']
 
-    a_factor_S = ((1.0 + p['epsilon_AS'] * A)
-                   / (1.0 + p['epsilon_AS'] * A_TYP))
+    a_factor_S = (1.0 + p['epsilon_AS'] * A) / (1.0 + p['epsilon_AS'] * A_TYP)
     dS = p['kappa_S'] * a_factor_S * Phi_S - S / p['tau_S']
 
-    a_factor_F = ((1.0 + p['lambda_A'] * A)
-                   / (1.0 + p['lambda_A'] * A_TYP))
-    dF = (p['kappa_FB'] * Phi_B + p['kappa_FS'] * Phi_S 
-          - a_factor_F / p['tau_F'] * F)
+    a_factor_F = (1.0 + p['lambda_A'] * A) / (1.0 + p['lambda_A'] * A_TYP)
+    dF = (KFB * Phi_B + KFS * Phi_S - a_factor_F / p['tau_F'] * F)
 
     dA = mu * A - p['eta'] * A * A * A
 
-    return np.array([dB, dS, dF, dA])
+    dKFB = (p['KFB_0'] - KFB) / p['tau_K'] + p['mu_K'] * Phi_B
+    dKFS = (p['KFS_0'] - KFS) / p['tau_K'] + p['mu_K'] * Phi_S
+
+    return np.array([dB, dS, dF, dA, dKFB, dKFS])
 
 
 def drift_jax(t, y, args):
-    """JAX v3 drift — G1-reparametrized. 4D state, 2D stimulus."""
+    """JAX v4 drift — 6D state [B, S, F, A, KFB, KFS]."""
     import jax.numpy as jnp
     p, Phi_arr = args
-    B = y[0]; S = y[1]; F = y[2]; A = y[3]
+    B, S, F, A, KFB, KFS = y[0], y[1], y[2], y[3], y[4], y[5]
 
     k = jnp.clip((t / DT_BIN_DAYS).astype(jnp.int32), 0, Phi_arr.shape[0] - 1)
     Phi_t = Phi_arr[k]
@@ -105,33 +104,34 @@ def drift_jax(t, y, args):
     mu = (p['mu_0'] + p['mu_B'] * B + p['mu_S'] * S
           - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev)
 
-    a_factor_B = ((1.0 + p['epsilon_AB'] * A)
-                   / (1.0 + p['epsilon_AB'] * A_TYP))
+    a_factor_B = (1.0 + p['epsilon_AB'] * A) / (1.0 + p['epsilon_AB'] * A_TYP)
     dB = p['kappa_B'] * a_factor_B * Phi_B - B / p['tau_B']
 
-    a_factor_S = ((1.0 + p['epsilon_AS'] * A)
-                   / (1.0 + p['epsilon_AS'] * A_TYP))
+    a_factor_S = (1.0 + p['epsilon_AS'] * A) / (1.0 + p['epsilon_AS'] * A_TYP)
     dS = p['kappa_S'] * a_factor_S * Phi_S - S / p['tau_S']
 
-    a_factor_F = ((1.0 + p['lambda_A'] * A)
-                   / (1.0 + p['lambda_A'] * A_TYP))
-    dF = (p['kappa_FB'] * Phi_B + p['kappa_FS'] * Phi_S
-          - a_factor_F / p['tau_F'] * F)
+    a_factor_F = (1.0 + p['lambda_A'] * A) / (1.0 + p['lambda_A'] * A_TYP)
+    dF = (KFB * Phi_B + KFS * Phi_S - a_factor_F / p['tau_F'] * F)
 
     dA = mu * A - p['eta'] * A * A * A
 
-    return jnp.array([dB, dS, dF, dA])
+    dKFB = (p['KFB_0'] - KFB) / p['tau_K'] + p['mu_K'] * Phi_B
+    dKFS = (p['KFS_0'] - KFS) / p['tau_K'] + p['mu_K'] * Phi_S
+
+    return jnp.array([dB, dS, dF, dA, dKFB, dKFS])
 
 
 # =========================================================================
-# DIFFUSION — 4D [B, S, F, A]
+# DIFFUSION — 6D
 # =========================================================================
 
 def diffusion_diagonal(params):
     return np.array([params['sigma_B'],
                      params['sigma_S'],
                      params['sigma_F'],
-                     params['sigma_A']])
+                     params['sigma_A'],
+                     params['sigma_K'],
+                     params['sigma_K']])
 
 
 def noise_scale_fn(y, params):
@@ -140,10 +140,14 @@ def noise_scale_fn(y, params):
     S = np.clip(y[1], EPS_S_FROZEN, 1.0 - EPS_S_FROZEN)
     F = max(y[2], 0.0)
     A = max(y[3], 0.0)
+    KFB = max(y[4], 0.0)
+    KFS = max(y[5], 0.0)
     return np.array([math.sqrt(B * (1.0 - B)),
                      math.sqrt(S * (1.0 - S)),
                      math.sqrt(F),
-                     math.sqrt(A + EPS_A_FROZEN)])
+                     math.sqrt(A + EPS_A_FROZEN),
+                     math.sqrt(KFB),
+                     math.sqrt(KFS)])
 
 
 def noise_scale_fn_jax(y, params):
@@ -153,10 +157,14 @@ def noise_scale_fn_jax(y, params):
     S = jnp.clip(y[1], EPS_S_FROZEN, 1.0 - EPS_S_FROZEN)
     F = jnp.maximum(y[2], 0.0)
     A = jnp.maximum(y[3], 0.0)
+    KFB = jnp.maximum(y[4], 0.0)
+    KFS = jnp.maximum(y[5], 0.0)
     return jnp.array([jnp.sqrt(B * (1.0 - B)),
                       jnp.sqrt(S * (1.0 - S)),
                       jnp.sqrt(F),
-                      jnp.sqrt(A + EPS_A_FROZEN)])
+                      jnp.sqrt(A + EPS_A_FROZEN),
+                      jnp.sqrt(KFB),
+                      jnp.sqrt(KFS)])
 
 
 # =========================================================================
@@ -178,11 +186,12 @@ def make_aux_jax(params, init_state, t_grid, exogenous):
 
 def make_y0(init_dict, params):
     del params
-    return np.array([init_dict['B_0'], init_dict['S_0'], init_dict['F_0'], init_dict['A_0']])
+    return np.array([init_dict['B_0'], init_dict['S_0'], init_dict['F_0'], 
+                     init_dict['A_0'], init_dict['KFB_0'], init_dict['KFS_0']])
 
 
 # =========================================================================
-# OBSERVATION CHANNELS
+# OBSERVATION CHANNELS — same as v3
 # =========================================================================
 
 def _sleep_prob(A, C, k_C, k_A, c_tilde):
@@ -242,18 +251,14 @@ def gen_obs_steps(trajectory, t_grid, params, aux, prior_channels, seed):
 
 
 def gen_obs_volumeload(trajectory, t_grid, params, aux, prior_channels, seed):
-    """VolumeLoad ~ N(beta_S·S - beta_F_VL·F, sigma_VL²). Measured sparsely during wake."""
     del aux
     rng = np.random.default_rng(seed)
     S = trajectory[:, 1]
     F = trajectory[:, 2]
     vl_mean = params['beta_S_VL'] * S - params['beta_F_VL'] * F
     vl_obs = vl_mean + rng.normal(0.0, params['sigma_VL'], size=len(t_grid))
-    
-    # Sparse sampling: every 2nd day, in the middle of wake window
     sleep_label = prior_channels['obs_sleep']['sleep_label']
     wake_mask = (sleep_label == 0)
-    
     idx_present = []
     bins_per_day = BINS_PER_DAY
     for d in range(0, len(t_grid)//bins_per_day, 2):
@@ -263,7 +268,6 @@ def gen_obs_volumeload(trajectory, t_grid, params, aux, prior_channels, seed):
         if len(day_wake_indices) > 0:
             mid_wake = day_wake_indices[len(day_wake_indices)//2]
             idx_present.append(mid_wake)
-            
     idx_present = np.array(idx_present, dtype=np.int32)
     return {'t_idx': idx_present, 'obs_value': vl_obs[idx_present].astype(np.float32)}
 
@@ -287,31 +291,34 @@ def gen_C_channel(trajectory, t_grid, params, aux, prior_channels, seed):
 
 def verify_physics(trajectory, t_grid, params):
     B = trajectory[:, 0]; S = trajectory[:, 1]; F = trajectory[:, 2]; A = trajectory[:, 3]
+    KFB = trajectory[:, 4]; KFS = trajectory[:, 5]
     return {
         'B_min': float(B.min()), 'B_max': float(B.max()),
         'S_min': float(S.min()), 'S_max': float(S.max()),
         'F_min': float(F.min()), 'F_max': float(F.max()),
         'A_min': float(A.min()), 'A_max': float(A.max()),
+        'KFB_min': float(KFB.min()), 'KFS_min': float(KFS.min()),
         'all_finite': bool(np.all(np.isfinite(trajectory))),
     }
 
 
 # =========================================================================
-# PARAMETERS — v3 Bimodal
+# PARAMETERS — v4 Variable Dose
 # =========================================================================
 
 DEFAULT_PARAMS = {
-    # --- Dynamics ---
     'tau_B':      42.0,
-    'kappa_B':     0.01248, # κ_B^eff
+    'kappa_B':     0.01248,
     'epsilon_AB':  0.40,
     'tau_S':      60.0,
-    'kappa_S':     0.00816, # κ_S^eff
+    'kappa_S':     0.00816,
     'epsilon_AS':  0.20,
-    'tau_F':       6.3636,  # τ_F^eff
-    'kappa_FB':    0.030,
-    'kappa_FS':    0.050,
+    'tau_F':       6.3636,
     'lambda_A':    1.00,
+    'KFB_0':       0.030,
+    'KFS_0':       0.050,
+    'tau_K':       21.0,
+    'mu_K':        0.005,
     'mu_0':        0.036,
     'mu_B':        0.30,
     'mu_S':        0.15,
@@ -322,9 +329,8 @@ DEFAULT_PARAMS = {
     'sigma_S':     0.008,
     'sigma_F':     0.012,
     'sigma_A':     0.020,
+    'sigma_K':     0.005,
     'phi':         0.0,
-
-    # --- Obs Coefficients ---
     'HR_base':     62.0, 'kappa_B_HR': 12.0, 'alpha_A_HR': 3.0, 'beta_C_HR': -2.5, 'sigma_HR': 2.0,
     'k_C':         3.0, 'k_A': 2.0, 'c_tilde': 0.5,
     'S_base':      30.0, 'k_F': 20.0, 'k_A_S': 8.0, 'beta_C_S': -4.0, 'sigma_S': 4.0,
@@ -332,21 +338,23 @@ DEFAULT_PARAMS = {
     'beta_S_VL':   100.0, 'beta_F_VL': 20.0, 'sigma_VL': 10.0,
 }
 
-DEFAULT_INIT = {'B_0': 0.05, 'S_0': 0.10, 'F_0': 0.30, 'A_0': 0.10}
+DEFAULT_INIT = {'B_0': 0.05, 'S_0': 0.10, 'F_0': 0.30, 'A_0': 0.10, 'KFB_0': 0.030, 'KFS_0': 0.050}
 
 
 # =========================================================================
 # THE MODEL OBJECT
 # =========================================================================
 
-HIGH_RES_FSA_V3_MODEL = SDEModel(
-    name="fsa_high_res_v3",
-    version="3.0",
+HIGH_RES_FSA_V4_MODEL = SDEModel(
+    name="fsa_high_res_v4",
+    version="4.0",
     states=(
         StateSpec("B", 0.0, 1.0),
         StateSpec("S", 0.0, 1.0),
         StateSpec("F", 0.0, 10.0),
         StateSpec("A", 0.0, 5.0),
+        StateSpec("KFB", 0.0, 1.0),
+        StateSpec("KFS", 0.0, 1.0),
     ),
     drift_fn=drift,
     drift_fn_jax=drift_jax,

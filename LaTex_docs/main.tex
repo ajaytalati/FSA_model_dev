@@ -2,8 +2,8 @@
 
 \input{preamble.tex}
 
-\title{Graduate Lecture Notes: The FSA-v3 Physiological Model\\
-\large Bimodal Training \& Autonomic Feedback}
+\title{Graduate Lecture Notes: The FSA-v4 Physiological Model\\
+\large Bimodal Training, Autonomic Feedback \& Variable Dose}
 \author{FSA Model Development Team}
 \date{\today}
 
@@ -12,7 +12,7 @@
 
 \begin{abstract}
 \noindent
-This document provides a comprehensive graduate-level introduction to the FSA-v3 (Fitness-Strength-Fatigue-Amplitude) physiological model. We detail the biological foundations based on the Banister impulse-response framework, its extension to bimodal training (aerobic and resistance), the mathematical formulation using Stochastic Differential Equations (SDEs) in a reparametrized form, and the numerical implementation within a JAX-based sandbox environment.
+This document provides a comprehensive graduate-level introduction to the FSA-v4 (Fitness-Strength-Fatigue-Amplitude) physiological model. We detail the biological foundations based on the Banister impulse-response framework, its extension to bimodal training (aerobic and resistance), the mathematical formulation using Stochastic Differential Equations (SDEs) in a reparametrized form, the variable-dose sensitivity dynamics of Busso (2003), and the numerical implementation within a JAX-based sandbox environment.
 \end{abstract}
 
 \tableofcontents
@@ -21,6 +21,7 @@ This document provides a comprehensive graduate-level introduction to the FSA-v3
 \input{sections/01_physiology.tex}
 \input{sections/02_mathematics.tex}
 \input{sections/07_bimodal_v3.tex}
+\input{sections/08_variable_dose_v4.tex}
 \input{sections/03_implementation.tex}
 \input{sections/05_stability.tex}
 \input{sections/06_inference.tex}

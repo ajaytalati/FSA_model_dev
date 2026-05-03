@@ -1,10 +1,9 @@
-"""FSA high-res control task spec — v3 (Bimodal Training).
+"""FSA high-res control task spec — v4 (Variable Dose).
 
-Bimodal extension of the FSA-v2 control spec.
-  - 4D state space: [B, S, F, A]
+Extension of the FSA-v3 control spec.
+  - 6D state space: [B, S, F, A, KFB, KFS]
   - 2D control input: [Phi_B, Phi_S]
-  - Cost functional rewards both aerobic (B) and strength (S) accrual.
-  - 16 anchors: 8 for Phi_B, 8 for Phi_S.
+  - Adaptive fatigue gains (Busso 2003).
 """
 
 from __future__ import annotations
@@ -33,6 +32,8 @@ INIT_STATE = dict(
     S=0.10,
     F=0.30,
     A=0.10,
+    KFB=0.030,
+    KFS=0.050,
 )
 
 EXOGENOUS = dict(
@@ -50,9 +51,6 @@ EXOGENOUS = dict(
 def _make_schedule(*, n_steps: int, dt: float, n_anchors: int,
                     Phi_default: float = EXOGENOUS['Phi_default'],
                     Phi_max: float = EXOGENOUS['Phi_max']):
-    """Return 2D RBF decoder.
-    θ = [theta_B, theta_S] — packed (2*n_anchors,)
-    """
     rbf = RBFSchedule(n_steps=n_steps, dt=dt, n_anchors=n_anchors, output='identity')
     Phi_design = rbf.design_matrix()
 
@@ -61,42 +59,42 @@ def _make_schedule(*, n_steps: int, dt: float, n_anchors: int,
 
     @jax.jit
     def schedule_from_theta(theta: jnp.ndarray) -> jnp.ndarray:
-        """θ shape (2*n_anchors,) → [Φ_B(t), Φ_S(t)] of shape (n_steps, 2)."""
         theta_B = theta[:n_anchors]
         theta_S = theta[n_anchors:]
-        
         raw_B = c_Phi + jnp.einsum('a,ta->t', theta_B, Phi_design)
         raw_S = c_Phi + jnp.einsum('a,ta->t', theta_S, Phi_design)
-        
         out_B = Phi_max * jax.nn.sigmoid(raw_B)
         out_S = Phi_max * jax.nn.sigmoid(raw_S)
-        
         return jnp.stack([out_B, out_S], axis=1)
 
     return rbf, schedule_from_theta
 
 
-# ── Step function (4D) ───────────────────────────────────────────────
+# ── Step function (6D) ───────────────────────────────────────────────
 
 def _make_em_step_fn(params, dt, n_substeps):
     sub_dt = dt / float(n_substeps)
     sqrt_dt = jnp.sqrt(dt)
 
     @jax.jit
-    def em_step(y, Phi_t, noise_4d):
+    def em_step(y, Phi_t, noise_6d):
         def sub_body(y_inner, _):
             return y_inner + sub_dt * drift_jax(y_inner, params, Phi_t), None
         y_det, _ = jax.lax.scan(sub_body, y, jnp.arange(n_substeps))
 
         sigma_y = diffusion_state_dep(y_det, params)
-        y_pred = y_det + sigma_y * sqrt_dt * noise_4d
+        y_pred = y_det + sigma_y * sqrt_dt * noise_6d
 
-        B_pred, S_pred, F_pred, A_pred = y_pred[0], y_pred[1], y_pred[2], y_pred[3]
-        B_next = jnp.where(B_pred < 0.0, -B_pred, jnp.where(B_pred > 1.0, 2.0 - B_pred, B_pred))
-        S_next = jnp.where(S_pred < 0.0, -S_pred, jnp.where(S_pred > 1.0, 2.0 - S_pred, S_pred))
-        F_next = jnp.abs(F_pred)
-        A_next = jnp.abs(A_pred)
-        return jnp.array([B_next, S_next, F_next, A_next])
+        B_p, S_p, F_p, A_p, KFB_p, KFS_p = y_pred[0], y_pred[1], y_pred[2], y_pred[3], y_pred[4], y_pred[5]
+        
+        B_n = jnp.where(B_p < 0.0, -B_p, jnp.where(B_p > 1.0, 2.0 - B_p, B_p))
+        S_n = jnp.where(S_p < 0.0, -S_p, jnp.where(S_p > 1.0, 2.0 - S_p, S_p))
+        F_n = jnp.abs(F_p)
+        A_n = jnp.abs(A_p)
+        KFB_n = jnp.abs(KFB_p)
+        KFS_n = jnp.abs(KFS_p)
+        
+        return jnp.array([B_n, S_n, F_n, A_n, KFB_n, KFS_n])
 
     return em_step
 
@@ -118,14 +116,15 @@ def _build_cost_and_traj_fns(
     p_jax = {k: jnp.asarray(float(v)) for k, v in TRUTH_PARAMS.items()}
     em_step = _make_em_step_fn(p_jax, dt, n_substeps)
 
-    grids = build_crn_noise_grids(n_inner=n_inner, n_steps=n_steps, n_channels=4, seed=seed)
+    grids = build_crn_noise_grids(n_inner=n_inner, n_steps=n_steps, n_channels=6, seed=seed)
     fixed_w = grids['wiener']
 
-    init_arr = jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], INIT_STATE['A']])
+    init_arr = jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], 
+                           INIT_STATE['A'], INIT_STATE['KFB'], INIT_STATE['KFS']])
 
     @jax.jit
     def cost_fn(theta: jnp.ndarray) -> jnp.ndarray:
-        Phi_arr = schedule_from_theta(theta) # (n_steps, 2)
+        Phi_arr = schedule_from_theta(theta)
 
         def trial(w_seq):
             def step(carry, k):
@@ -134,19 +133,13 @@ def _build_cost_and_traj_fns(
                 y_next = em_step(y, Phi_t, w_seq[k])
                 
                 # Concurrent Training functional: Maximize A + B + S
-                # This pushes toward genetic limits while A ensures efficiency/safety.
                 J_acc = J_acc + (y[3] + y[0] + y[1]) * dt
                 Phi_acc = Phi_acc + jnp.sum(Phi_t**2) * dt
-                barrier_acc = barrier_acc + (
-                    jnp.maximum(y[2] - F_max, 0.0) ** 2 * dt
-                )
+                barrier_acc = barrier_acc + (jnp.maximum(y[2] - F_max, 0.0) ** 2 * dt)
                 return (y_next, J_acc, Phi_acc, barrier_acc), None
 
-            init_carry = (init_arr, jnp.float64(0.0),
-                           jnp.float64(0.0), jnp.float64(0.0))
-            (_, J_acc, Phi_acc, barrier_acc), _ = jax.lax.scan(
-                step, init_carry, jnp.arange(n_steps),
-            )
+            init_carry = (init_arr, jnp.float64(0.0), jnp.float64(0.0), jnp.float64(0.0))
+            (_, J_acc, Phi_acc, barrier_acc), _ = jax.lax.scan(step, init_carry, jnp.arange(n_steps))
             return -J_acc + lam_phi * Phi_acc + lam_barrier * barrier_acc
 
         return jnp.mean(jax.vmap(trial)(fixed_w))
@@ -154,7 +147,7 @@ def _build_cost_and_traj_fns(
     @jax.jit
     def traj_sample_fn(theta: jnp.ndarray, key) -> jnp.ndarray:
         Phi_arr = schedule_from_theta(theta)
-        w_seq = jax.random.normal(key, (n_steps, 4), dtype=jnp.float64)
+        w_seq = jax.random.normal(key, (n_steps, 6), dtype=jnp.float64)
 
         def step(y, k):
             y_next = em_step(y, Phi_arr[k], w_seq[k])
@@ -178,7 +171,8 @@ def _build_gates(*, schedule_from_theta,
     
     p_jax = {k: jnp.asarray(float(v)) for k, v in TRUTH_PARAMS.items()}
     em_step = _make_em_step_fn(p_jax, dt, n_substeps)
-    init_arr = jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], INIT_STATE['A']])
+    init_arr = jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], 
+                           INIT_STATE['A'], INIT_STATE['KFB'], INIT_STATE['KFS']])
 
     def _make_eval_fn(n_trials_static: int):
         @jax.jit
@@ -195,7 +189,7 @@ def _build_gates(*, schedule_from_theta,
                 (_, A_acc, F_viol), _ = jax.lax.scan(step, init_carry, jnp.arange(n_steps))
                 return A_acc / (n_steps * dt), F_viol / n_steps
 
-            w = jax.random.normal(key, (n_trials_static, n_steps, 4), dtype=jnp.float64)
+            w = jax.random.normal(key, (n_trials_static, n_steps, 6), dtype=jnp.float64)
             A_means, F_viols = jax.vmap(trial)(w)
             return jnp.mean(A_means), jnp.mean(F_viols)
         return _evaluate_schedule_jit
@@ -203,14 +197,12 @@ def _build_gates(*, schedule_from_theta,
     _eval_baseline_jit = _make_eval_fn(n_baseline_trials)
     _eval_smc_jit = _make_eval_fn(n_eval_trials)
 
-    # Baseline: Phi_B = Phi_default, Phi_S = 0 (Aerobic only)
     Phi_const = jnp.zeros((n_steps, 2), dtype=jnp.float64)
     Phi_const = Phi_const.at[:, 0].set(Phi_baseline)
     base_key = jax.random.PRNGKey(seed)
-    baseline_mean_A_j, baseline_F_violation_j = _eval_baseline_jit(Phi_const, base_key)
+    baseline_mean_A_j, _ = _eval_baseline_jit(Phi_const, base_key)
     baseline_mean_A = float(baseline_mean_A_j)
 
-    # Sedentary (Φ ≡ 0)
     Phi_zero = jnp.zeros((n_steps, 2), dtype=jnp.float64)
     sedentary_mean_A_j, _ = _eval_baseline_jit(Phi_zero, jax.random.PRNGKey(seed + 100))
     sedentary_mean_A = float(sedentary_mean_A_j)
@@ -274,9 +266,10 @@ def build_control_spec(
         schedule_from_theta=schedule_from_theta, n_steps=n_steps, dt=dt_days, n_substeps=n_substeps, F_max=F_max)
 
     spec = ControlSpec(
-        name=f'fsa_high_res_v3_T{int(T_total_days)}d', version='3.0',
+        name=f'fsa_high_res_v4_T{int(T_total_days)}d', version='4.0',
         dt=dt_days, n_steps=n_steps, n_substeps=n_substeps,
-        initial_state=jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], INIT_STATE['A']]),
+        initial_state=jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'], 
+                                 INIT_STATE['A'], INIT_STATE['KFB'], INIT_STATE['KFS']]),
         truth_params=dict(TRUTH_PARAMS),
         theta_dim=2*n_anchors, sigma_prior=1.5, prior_mean=0.0,
         cost_fn=cost_fn, schedule_from_theta=schedule_from_theta,
