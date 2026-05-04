@@ -10,6 +10,25 @@ Dates are in `YYYY-MM-DD`; times are local (BST unless otherwise noted).
 
 ## 2026-05-04
 
+### 14:28 BST — Phase 3 (scenarios): 3 Banister-horizon plant regression scripts + pytest smoke tests; 13/13 green
+- **Author:** Ajay Talati (per the approved plan; basin thresholds smoke-only per AskUserQuestion answer)
+- **Assistant:** Claude Code (Opus 4.7, 1M context)
+- **Branch:** `claude/dev-sandbox-main`
+- **Files added:**
+  - [scenarios/_common.py](scenarios/_common.py) — `run_fsa_scenario(scenario_key)` runner. Drives `StepwisePlant.advance()` for the full horizon under constant daily Φ (per `HORIZON_PHI`: `42d → 1.5/day`, `56d → 1.2/day`, `84d → 1.0/day`), samples all 4 obs channels, applies 5% Bernoulli dropout to HR + stress (sleep + steps preserved), saves a packaged-style artefact to `outputs/fsa/<key>/`. Smoke-only basin classifier (`_smoke_basin_check`) — finite + physical bounds; numerical thresholds deferred until reference data is pinned.
+  - [scenarios/42d_horizon_max_sustainable.py](scenarios/42d_horizon_max_sustainable.py) — T=42 d, Φ=1.5/day. Canonical Banister chronic timescale.
+  - [scenarios/56d_horizon_periodised.py](scenarios/56d_horizon_periodised.py) — T=56 d, Φ=1.2/day. Mid-horizon reduced load.
+  - [scenarios/84d_horizon_long_block.py](scenarios/84d_horizon_long_block.py) — T=84 d, Φ=1.0/day. Long aerobic block.
+  - [scenarios/__init__.py](scenarios/__init__.py) — empty marker for setuptools.
+  - [tests/test_plant_regression_scenarios.py](tests/test_plant_regression_scenarios.py) — pytest-parametrized over the 3 horizon keys; calls `run_fsa_scenario(key)` and asserts smoke OK.
+- **Why:** `_plant.py` is essential for the closed-loop MPC bench. The 3 scenario scripts give long-horizon end-to-end exercise of `_plant.py` + `_dynamics.py` + the obs samplers in `simulation.py` — the full path the MPC consumes. Even with smoke-only basin checks, a regression that produces a non-finite trajectory or a B that escapes [0, 1] / F < 0 / A < 0 will fail the smoke test loudly.
+- **Verified by:**
+  - One scenario via direct script: `python scenarios/42d_horizon_max_sustainable.py` from `/tmp` → SMOKE OK. B grew 0.05 → 0.527 over 42 days; A grew 0.10 → 0.575; F oscillates around 0.23 (consistent with the project memory note about T=42 = Banister overload, B inflects ~day 20).
+  - Full pytest from `/tmp` (no PYTHONPATH): `pytest tests/ -v` → **13/13 passed in 4.86 s**. New scenario tests run quickly because JIT cache reuses across parametrized variants.
+  - Each scenario writes its trajectory + 4 obs streams to `outputs/fsa/<scenario>/` as expected (gitignored — regenerable).
+- **Open follow-up:**
+  - Numerical basin thresholds (replacing the smoke-only `_smoke_basin_check` with quantitative end-of-trial bounds on B / F / A per horizon) require reference data from the parent repo's bench outputs. Flagged in the plan and `scenarios/_common.py:_smoke_basin_check` as a follow-up task.
+
 ### 14:23 BST — Phase 2 (tools): 5 validation gates + export pipeline; full pipeline green
 - **Author:** Ajay Talati (per the approved plan)
 - **Assistant:** Claude Code (Opus 4.7, 1M context)
