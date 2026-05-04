@@ -1,0 +1,108 @@
+{
+    "model": "FSA-v2 (Banister + autonomic amplitude)",
+    "version": "0.2.0-verified",
+    "validation": {
+        "identifiability": {
+            "rank": 18,
+            "cond": 1.2812189743335554e+21,
+            "identifiable_subset": [
+                "tau_F",
+                "kappa_B",
+                "kappa_F",
+                "mu_0",
+                "mu_B",
+                "mu_F",
+                "HR_base",
+                "kappa_B_HR",
+                "alpha_A_HR",
+                "beta_C_HR",
+                "sigma_HR",
+                "k_C",
+                "k_A",
+                "c_tilde",
+                "S_base",
+                "k_F",
+                "k_A_S",
+                "beta_C_S",
+                "sigma_S",
+                "mu_step0",
+                "beta_B_st",
+                "beta_F_st",
+                "beta_A_st",
+                "beta_C_st",
+                "sigma_st"
+            ],
+            "n_identifiable": 25,
+            "note": "FIM under 1-day constant-Phi=1.0 rollout, all 4 obs channels included",
+            "passed": true
+        },
+        "stability": {
+            "h_max_mins": 1484.3780043280867,
+            "max_rho_per_day": 1.9402065993989523,
+            "n_substeps_for_15min": 1,
+            "worst_case_state": {
+                "B": 0.05,
+                "F": 1.0,
+                "A": 1.5,
+                "Phi": 3.0
+            },
+            "passed": true
+        },
+        "reconciliation": {
+            "passed": true
+        },
+        "likelihood": {
+            "truth_log_lik": -4.143109960734005,
+            "illegal_log_lik": -26.900557091883943,
+            "pillar1_peakedness": true,
+            "pillar2_boundary": true,
+            "pillar3_prior_align": true,
+            "passed": true
+        },
+        "controller": {
+            "theta_dim": 8,
+            "initial_cost": -8.149172055048014,
+            "gradient_norm": 1.133100875318182,
+            "gradient_range": [
+                -0.7183359864357646,
+                0.01691926392272869
+            ],
+            "new_cost": -8.63320084043693,
+            "cost_improvement": 0.48402878538891514,
+            "passed": true
+        }
+    },
+    "export_config": {
+        "h_max_mins": 1484.3780043280867,
+        "n_substeps_for_15min": 1,
+        "identifiable_subset": [
+            "tau_F",
+            "kappa_B",
+            "kappa_F",
+            "mu_0",
+            "mu_B",
+            "mu_F",
+            "HR_base",
+            "kappa_B_HR",
+            "alpha_A_HR",
+            "beta_C_HR",
+            "sigma_HR",
+            "k_C",
+            "k_A",
+            "c_tilde",
+            "S_base",
+            "k_F",
+            "k_A_S",
+            "beta_C_S",
+            "sigma_S",
+            "mu_step0",
+            "beta_B_st",
+            "beta_F_st",
+            "beta_A_st",
+            "beta_C_st",
+            "sigma_st"
+        ],
+        "fim_rank": 18,
+        "fim_cond": 1.2812189743335554e+21
+    }
+}
