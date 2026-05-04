@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fsa-model-dev"
+version = "0.5.0"
+description = "Dev sandbox for the FSA-v5 physiological SDE model (6-state Banister + autonomic amplitude + variable-dose K + Hill deconditioning, 5-channel obs incl. Volume Load) — validate the model files (identifiability via FIM, stiffness, plant↔estimator drift parity, sim↔estimator obs consistency, controller sandbox, multi-regime plant basin smoke tests, chance-constrained cost) before exporting them to the smc2fc framework."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "Ajay Talati"}]
+
+# The framework code is a personal project with its own pyproject.toml;
+# pin to its default branch via git URL so `pip install -e .` always
+# picks up the latest framework code without us having to vendor it.
+dependencies = [
+    "smc2fc @ git+https://github.com/ajaytalati/python-smc2-filtering-control.git@master",
+    # smc2fc already pulls jax/jaxlib/numpy/scipy/matplotlib transitively;
+    # listed below only what this dev repo touches directly.
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+# This dev sandbox is a flat `models/` + `tools/` + `tests/` + `scenarios/`
+# repo, not a single top-level package. Pip-installing it gives you the deps
+# + makes the four subpackages importable.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["models*", "tools*", "tests*", "scenarios*"]
+exclude = ["exports*", "bug_reports*", "LaTex_docs*", "outputs*", "examples*", "claude_plans*", "__pycache__*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Pre-existing legacy tests (test_artifacts.py, test_fsa_physics.py,
+# test_fsa_v3_physics.py, test_v3_identifiability.py) reference v2/v3
+# model symbols (HIGH_RES_FSA_V2_ESTIMATION, HIGH_RES_FSA_V2_MODEL,
+# HIGH_RES_FSA_V3_MODEL) that were removed when the model was upgraded
+# to v4/v5. Excluding them from collection so pytest can find the
+# tests that DO work (v4 physics + v5 smoke + the new structural
+# tests added on this branch).
+addopts = "-ra"
+# Pre-existing legacy v2/v3 test files that import removed model symbols
+# (HIGH_RES_FSA_V2_*, HIGH_RES_FSA_V3_*) are excluded from collection
+# via tests/conftest.py:collect_ignore.

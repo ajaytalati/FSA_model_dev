@@ -1,7 +1,32 @@
 __pycache__/
 *.pyc
+*.py[cod]
+*$py.class
+*.so
 .pytest_cache/
 .ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+.cache/
+
+# venvs (in case someone creates one inside the repo)
+.venv/
+venv/
+env/
+
+# JAX compilation cache
+.jax_compilation_cache/
+
+# editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
 LaTex_docs/*.aux
 LaTex_docs/*.log
 LaTex_docs/*.out

@@ -12,7 +12,7 @@ Extension of the FSA-v3 model to include dynamic fatigue gains (Busso 2003).
 import math
 import numpy as np
 
-from simulator.sde_model import (
+from smc2fc.simulator.sde_model import (
     SDEModel, StateSpec, ChannelSpec,
     DIFFUSION_DIAGONAL_STATE,
 )
