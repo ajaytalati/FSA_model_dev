@@ -10,6 +10,23 @@ Dates are in `YYYY-MM-DD`; times are local (BST unless otherwise noted).
 
 ## 2026-05-04
 
+### 14:01 BST — Phase 2 (tests): added obs-consistency + reconciliation tests; 10/10 green
+- **Author:** Ajay Talati (per the approved plan)
+- **Assistant:** Claude Code (Opus 4.7, 1M context)
+- **Branch:** `claude/dev-sandbox-main`
+- **Files added:**
+  - [tests/test_obs_consistency.py](tests/test_obs_consistency.py) — 5 pytest tests asserting that the simulator's noise-free predicted mean (or, for sleep, Bernoulli probability) matches the estimator's likelihood prediction at the same `(B, F, A)` state, params, and circadian C(t). One test per Gaussian channel (HR, stress, steps), one for the Bernoulli sleep marginal (verified both in closed form against the estimator and via a 30 000-bin empirical frequency on the sim side), plus a belt-and-braces sweep over `HR_base` to catch any future regression of an FSA equivalent of SWAT's D1 bug.
+  - [tests/test_reconciliation.py](tests/test_reconciliation.py) — 2 pytest tests:
+    - `test_plant_and_estimator_share_drift` — single-step Euler prediction must be bit-equivalent on both sides (plant uses `_dynamics.drift_jax`; estimator inlines its own copy in `propagate_fn`). Diff < 1e-10.
+    - `test_plant_advance_smoke` — drives `StepwisePlant.advance(1 bin)` end-to-end and confirms state stays in physical bounds (B ∈ [0,1], F ≥ 0, A ≥ 0) and the output dict contains all 4 obs channels + Phi + C.
+- **Why:** These two test files are the structural protection layers identified in the parent CLAUDE.md's MPC-dependency-chain note. Without them, sim ↔ estimator divergence (the SWAT D1/D2 failure mode) and plant ↔ estimator drift divergence (the silent-MPC-corruption failure mode) both go undetected. Now any future change that breaks either invariant fails one of these tests with a clear message naming what's wrong.
+- **Verified by:**
+  - `cd /tmp && pytest /home/ajay/Repos/FSA_model_dev/tests/ -v` (no PYTHONPATH, not in repo dir) → **10/10 passed in 4.05 s**:
+    - 3 pre-existing (`test_artifacts.py` × 2, `test_fsa_physics.py` × 1) — unchanged, still green.
+    - 5 obs-consistency tests — all pass cleanly.
+    - 2 reconciliation tests — drift parity to < 1e-10, plant smoke OK.
+  - The sim/est formulas in FSA's current code are properly aligned (no D1/D2-equivalent asymmetries). Both sides implement HR / stress / steps / sleep using identical formulas referencing `(B, F, A, C)`; the test now pins this to LaTeX explicitly.
+
 ### 13:46 BST — Phase 1 complete: pyproject + LICENSE + .gitignore + CHANGELOG; bundled smc2fc/simulator stubs deleted; imports rewired to real smc2fc
 - **Author:** Ajay Talati (per the approved plan at `claude_plans/FSA_dev_sandbox_*_2026-05-04_1346.md`)
 - **Assistant:** Claude Code (Opus 4.7, 1M context)
