@@ -61,7 +61,26 @@ def _bin_lookup_2d(t_days, array_2d, dt_bin_days=DT_BIN_DAYS):
 
 
 def drift(t, y, params, aux):
-    """Numpy v4 drift — 6D state [B, S, F, A, KFB, KFS]."""
+    """Numpy drift for FSA-v5 (6D state, Hill deconditioning, recovers v4
+    when ``params['mu_dec_B'] = params['mu_dec_S'] = 0``).
+
+    KEEP IN SYNC with ``models.fsa_high_res._dynamics.drift_jax`` — that
+    JAX function is the single source of truth, and this numpy mirror
+    exists only because some legacy paths (the scipy ODE solver via
+    ``simulator.sde_solver_diffrax`` and the StateSpec deterministic
+    fallback) need a numpy-callable drift.
+
+    Args:
+        t: float, time in days (used to look up Phi at the current bin).
+        y: shape (6,) state ``[B, S, F, A, K_FB, K_FS]``.
+        params: dict of scalar parameters; must include v5 Hill keys
+            (``B_dec``, ``S_dec``, ``mu_dec_B``, ``mu_dec_S``, ``n_dec``).
+        aux: tuple ``(Phi_arr,)`` — per-bin stimulus schedule, shape
+            (n_bins, 2).
+
+    Returns:
+        shape (6,) numpy array of time-derivatives.
+    """
     (Phi_arr,) = aux
     p = params
     B, S, F, A, KFB, KFS = y[0], y[1], y[2], y[3], y[4], y[5]
@@ -70,8 +89,18 @@ def drift(t, y, params, aux):
     Phi_B, Phi_S = Phi_t[0], Phi_t[1]
 
     F_dev = F - F_TYP
+    # FSA-v5 Hill deconditioning — penalise low chronic capacity.
+    # See LaTeX §10.2, equation (eq:v5-mubar). Defaults to 0 in v4.
+    n   = p['n_dec']
+    Bn  = max(B, 0.0) ** n
+    Sn  = max(S, 0.0) ** n
+    Bdn = p['B_dec'] ** n
+    Sdn = p['S_dec'] ** n
+    dec_B = p['mu_dec_B'] * Bdn / (Bn + Bdn)
+    dec_S = p['mu_dec_S'] * Sdn / (Sn + Sdn)
     mu = (p['mu_0'] + p['mu_B'] * B + p['mu_S'] * S
-          - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev)
+          - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev
+          - dec_B - dec_S)
 
     a_factor_B = (1.0 + p['epsilon_AB'] * A) / (1.0 + p['epsilon_AB'] * A_TYP)
     dB = p['kappa_B'] * a_factor_B * Phi_B - B / p['tau_B']
@@ -91,7 +120,15 @@ def drift(t, y, params, aux):
 
 
 def drift_jax(t, y, args):
-    """JAX v4 drift — 6D state [B, S, F, A, KFB, KFS]."""
+    """JAX drift for FSA-v5 (6D state, Hill deconditioning).
+
+    Inline mirror of ``models.fsa_high_res._dynamics.drift_jax`` — same
+    equations, but adapted for the SDEModel calling convention here
+    (which passes ``args = (params_dict, Phi_arr)`` and a scalar time
+    ``t`` instead of a pre-looked-up Phi vector).
+
+    Maps to LaTeX §11.1.
+    """
     import jax.numpy as jnp
     p, Phi_arr = args
     B, S, F, A, KFB, KFS = y[0], y[1], y[2], y[3], y[4], y[5]
@@ -101,8 +138,18 @@ def drift_jax(t, y, args):
     Phi_B, Phi_S = Phi_t[0], Phi_t[1]
 
     F_dev = F - F_TYP
+    # FSA-v5 Hill deconditioning subtraction. Identical structure to
+    # _dynamics.drift_jax (lines marked "v5 Hill" in that file).
+    n   = p['n_dec']
+    Bn  = jnp.power(jnp.maximum(B, 0.0), n)
+    Sn  = jnp.power(jnp.maximum(S, 0.0), n)
+    Bdn = jnp.power(p['B_dec'], n)
+    Sdn = jnp.power(p['S_dec'], n)
+    dec_B = p['mu_dec_B'] * Bdn / (Bn + Bdn)
+    dec_S = p['mu_dec_S'] * Sdn / (Sn + Sdn)
     mu = (p['mu_0'] + p['mu_B'] * B + p['mu_S'] * S
-          - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev)
+          - p['mu_F'] * F - p['mu_FF'] * F_dev * F_dev
+          - dec_B - dec_S)
 
     a_factor_B = (1.0 + p['epsilon_AB'] * A) / (1.0 + p['epsilon_AB'] * A_TYP)
     dB = p['kappa_B'] * a_factor_B * Phi_B - B / p['tau_B']
@@ -307,6 +354,7 @@ def verify_physics(trajectory, t_grid, params):
 # =========================================================================
 
 DEFAULT_PARAMS = {
+    # ── Dynamics (v4 + v5-Hill) ──
     'tau_B':      42.0,
     'kappa_B':     0.01248,
     'epsilon_AB':  0.40,
@@ -331,12 +379,32 @@ DEFAULT_PARAMS = {
     'sigma_A':     0.020,
     'sigma_K':     0.005,
     'phi':         0.0,
+    # ── FSA-v5 Hill deconditioning (v4-recovering defaults: mu_dec_*=0) ──
+    # Override these with the TRUTH_PARAMS_V5 values from _dynamics.py
+    # (B_dec=S_dec=0.07, mu_dec_B=mu_dec_S=0.10) to enable the v5
+    # closed-island basin topology (LaTeX §10).
+    'B_dec':       0.07,
+    'S_dec':       0.07,
+    'mu_dec_B':    0.0,        # 0 = v4 numerics; set to 0.10 for v5
+    'mu_dec_S':    0.0,        # 0 = v4 numerics; set to 0.10 for v5
+    'n_dec':       4.0,
+    # ── Observation channels ──
     'HR_base':     62.0, 'kappa_B_HR': 12.0, 'alpha_A_HR': 3.0, 'beta_C_HR': -2.5, 'sigma_HR': 2.0,
     'k_C':         3.0, 'k_A': 2.0, 'c_tilde': 0.5,
     'S_base':      30.0, 'k_F': 20.0, 'k_A_S': 8.0, 'beta_C_S': -4.0, 'sigma_S': 4.0,
     'mu_step0':    5.5, 'beta_B_st': 0.8, 'beta_F_st': 0.5, 'beta_A_st': 0.3, 'beta_C_st': -0.8, 'sigma_st': 0.5,
     'beta_S_VL':   100.0, 'beta_F_VL': 20.0, 'sigma_VL': 10.0,
 }
+
+# FSA-v5 parameter set: same as DEFAULT_PARAMS but with the Hill deconditioning
+# turned ON. This is the concrete realisation of TRUTH_PARAMS_V5 from
+# _dynamics.py, suitable for SDEModel-style calls (which expect params as a
+# flat dict including observation coefficients).
+DEFAULT_PARAMS_V5 = dict(DEFAULT_PARAMS)
+DEFAULT_PARAMS_V5.update(
+    mu_dec_B=0.10,    # closed-island calibration (LaTeX §10.4 Table)
+    mu_dec_S=0.10,
+)
 
 DEFAULT_INIT = {'B_0': 0.05, 'S_0': 0.10, 'F_0': 0.30, 'A_0': 0.10, 'KFB_0': 0.030, 'KFS_0': 0.050}
 
@@ -345,17 +413,38 @@ DEFAULT_INIT = {'B_0': 0.05, 'S_0': 0.10, 'F_0': 0.30, 'A_0': 0.10, 'KFB_0': 0.0
 # THE MODEL OBJECT
 # =========================================================================
 
+# Shared 6D state spec — identical between v4 and v5; only the drift behaves
+# differently (via the Hill term in the bifurcation parameter mu).
+_FSA_HIGHRES_STATES = (
+    StateSpec("B",   0.0,  1.0),
+    StateSpec("S",   0.0,  1.0),
+    StateSpec("F",   0.0, 10.0),
+    StateSpec("A",   0.0,  5.0),
+    StateSpec("KFB", 0.0,  1.0),
+    StateSpec("KFS", 0.0,  1.0),
+)
+
+# Shared observation channels — identical between v4 and v5.
+_FSA_HIGHRES_CHANNELS = (
+    ChannelSpec("obs_sleep",      depends_on=(),             generate_fn=gen_obs_sleep),
+    ChannelSpec("obs_HR",         depends_on=("obs_sleep",), generate_fn=gen_obs_hr),
+    ChannelSpec("obs_stress",     depends_on=("obs_sleep",), generate_fn=gen_obs_stress),
+    ChannelSpec("obs_steps",      depends_on=("obs_sleep",), generate_fn=gen_obs_steps),
+    ChannelSpec("obs_volumeload", depends_on=("obs_sleep",), generate_fn=gen_obs_volumeload),
+    ChannelSpec("Phi",            depends_on=(),             generate_fn=gen_Phi_channel),
+    ChannelSpec("C",              depends_on=(),             generate_fn=gen_C_channel),
+)
+
+
+# === FSA-v4 SDEModel (back-compat) ===========================================
+# Kept as a thin alias for any consumer (test, example, tool) that still
+# imports ``HIGH_RES_FSA_V4_MODEL``. Numerically identical to the v5 model
+# when ``DEFAULT_PARAMS`` is used because that dict has ``mu_dec_*=0`` —
+# the v5 Hill term in ``drift`` / ``drift_jax`` then evaluates to zero.
 HIGH_RES_FSA_V4_MODEL = SDEModel(
     name="fsa_high_res_v4",
     version="4.0",
-    states=(
-        StateSpec("B", 0.0, 1.0),
-        StateSpec("S", 0.0, 1.0),
-        StateSpec("F", 0.0, 10.0),
-        StateSpec("A", 0.0, 5.0),
-        StateSpec("KFB", 0.0, 1.0),
-        StateSpec("KFS", 0.0, 1.0),
-    ),
+    states=_FSA_HIGHRES_STATES,
     drift_fn=drift,
     drift_fn_jax=drift_jax,
     diffusion_type=DIFFUSION_DIAGONAL_STATE,
@@ -365,16 +454,32 @@ HIGH_RES_FSA_V4_MODEL = SDEModel(
     make_aux_fn=make_aux,
     make_aux_fn_jax=make_aux_jax,
     make_y0_fn=make_y0,
-    channels=(
-        ChannelSpec("obs_sleep",      depends_on=(),             generate_fn=gen_obs_sleep),
-        ChannelSpec("obs_HR",         depends_on=("obs_sleep",), generate_fn=gen_obs_hr),
-        ChannelSpec("obs_stress",     depends_on=("obs_sleep",), generate_fn=gen_obs_stress),
-        ChannelSpec("obs_steps",      depends_on=("obs_sleep",), generate_fn=gen_obs_steps),
-        ChannelSpec("obs_volumeload", depends_on=("obs_sleep",), generate_fn=gen_obs_volumeload),
-        ChannelSpec("Phi",            depends_on=(),             generate_fn=gen_Phi_channel),
-        ChannelSpec("C",              depends_on=(),             generate_fn=gen_C_channel),
-    ),
+    channels=_FSA_HIGHRES_CHANNELS,
     verify_physics_fn=verify_physics,
     param_sets={'A': DEFAULT_PARAMS},
+    init_states={'A': DEFAULT_INIT},
+)
+
+
+# === FSA-v5 SDEModel (the new default for the smc2fc port) ===================
+# Identical structure to v4 but ships ``DEFAULT_PARAMS_V5`` with the Hill
+# deconditioning enabled (mu_dec_* > 0). The drift function is the same
+# object — v5 vs v4 difference is entirely encoded in the params dict.
+HIGH_RES_FSA_V5_MODEL = SDEModel(
+    name="fsa_high_res_v5",
+    version="5.0",
+    states=_FSA_HIGHRES_STATES,
+    drift_fn=drift,
+    drift_fn_jax=drift_jax,
+    diffusion_type=DIFFUSION_DIAGONAL_STATE,
+    diffusion_fn=diffusion_diagonal,
+    noise_scale_fn=noise_scale_fn,
+    noise_scale_fn_jax=noise_scale_fn_jax,
+    make_aux_fn=make_aux,
+    make_aux_fn_jax=make_aux_jax,
+    make_y0_fn=make_y0,
+    channels=_FSA_HIGHRES_CHANNELS,
+    verify_physics_fn=verify_physics,
+    param_sets={'A': DEFAULT_PARAMS_V5},
     init_states={'A': DEFAULT_INIT},
 )

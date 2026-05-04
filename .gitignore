@@ -8,4 +8,13 @@ LaTex_docs/*.out
 LaTex_docs/*.toc
 LaTex_docs/*.pdf
 LaTex_docs/*.b64
+LaTex_docs/*.fdb_latexmk
+LaTex_docs/*.fls
+LaTex_docs/*.synctex.gz
 fsa_simulation.png
+
+# Python build artefacts
+*.egg-info/
+
+# Tool-generated outputs (regenerable from tools/*.py)
+outputs/

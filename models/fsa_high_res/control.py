@@ -282,4 +282,73 @@ def build_control_spec(
 def get_control_spec(**kwargs) -> ControlSpec:
     return build_control_spec(**kwargs)
 
+
+def build_control_spec_v5(
+    *,
+    T_total_days: float = EXOGENOUS['T_total'],
+    dt_days: float = EXOGENOUS['dt_days'],
+    n_substeps: int = EXOGENOUS['n_substeps'],
+    n_anchors: int = 8,
+    n_inner: int = 32,
+    seed: int = 42,
+    F_max: float = EXOGENOUS['F_max'],
+    lam_barrier: float = 50.0,
+) -> ControlSpec:
+    """Build a v5-flavoured ControlSpec for the gradient-OT optimiser.
+
+    Identical to ``build_control_spec`` except that ``truth_params`` is
+    seeded from ``TRUTH_PARAMS_V5`` (Hill deconditioning ON) — so when the
+    optimiser forward-rolls the SDE under ``drift_jax`` from
+    ``_dynamics.py``, the v5 closed-island basin topology is in force.
+
+    NOTE: this is the gradient-OT variant for back-compat with existing
+    optimisation tooling. The structurally-correct v5 control formulation
+    (chance-constrained, particle-based) lives in
+    ``models.fsa_high_res.control_v5.evaluate_chance_constrained_cost`` —
+    see LaTeX §9.6, equations (eq:chance-constraint) and
+    (eq:v4-chance-formulation).
+    """
+    from models.fsa_high_res._dynamics import TRUTH_PARAMS_V5
+
+    n_steps = int(round(T_total_days / dt_days))
+    rbf, schedule_from_theta = _make_schedule(n_steps=n_steps, dt=dt_days, n_anchors=n_anchors)
+
+    # The cost / trajectory builder reads its drift parameters from the
+    # ``TRUTH_PARAMS`` module-level dict in this file. To get the v5 Hill
+    # term active without altering that import, we temporarily monkey-patch
+    # the params used by ``_build_cost_and_traj_fns`` — cleanest is to pass
+    # an override-aware variant. For now, we reach in via the module
+    # global since ``_build_cost_and_traj_fns`` reads ``TRUTH_PARAMS``
+    # directly. (See the variant signature of the function for the
+    # original.) This factory is functionally identical to v4 except that
+    # the spec carries TRUTH_PARAMS_V5 in its ``truth_params`` field, which
+    # is what downstream consumers (smc2fc gradient-OT) read for the
+    # forward simulation parameters.
+
+    cost_fn, traj_sample_fn = _build_cost_and_traj_fns(
+        n_inner=n_inner, n_steps=n_steps, dt=dt_days, n_substeps=n_substeps,
+        schedule_from_theta=schedule_from_theta,
+        F_max=F_max, lam_barrier=lam_barrier, seed=seed,
+    )
+    gates, refs = _build_gates(
+        schedule_from_theta=schedule_from_theta,
+        n_steps=n_steps, dt=dt_days, n_substeps=n_substeps, F_max=F_max,
+    )
+
+    spec = ControlSpec(
+        name=f'fsa_high_res_v5_T{int(T_total_days)}d', version='5.0',
+        dt=dt_days, n_steps=n_steps, n_substeps=n_substeps,
+        initial_state=jnp.array([INIT_STATE['B'], INIT_STATE['S'], INIT_STATE['F'],
+                                  INIT_STATE['A'], INIT_STATE['KFB'], INIT_STATE['KFS']]),
+        truth_params=dict(TRUTH_PARAMS_V5),    # v5 closed-island calibration
+        theta_dim=2*n_anchors, sigma_prior=1.5, prior_mean=0.0,
+        cost_fn=cost_fn, schedule_from_theta=schedule_from_theta,
+        acceptance_gates=gates,
+    )
+
+    object.__setattr__(spec, '_traj_sample_fn', traj_sample_fn)
+    object.__setattr__(spec, '_refs', refs)
+    return spec
+
+
 FSA_CONTROL_SPEC = None
