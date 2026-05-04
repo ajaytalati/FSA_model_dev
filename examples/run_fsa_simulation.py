@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from models.fsa_high_res.simulation import HIGH_RES_FSA_V2_MODEL, BINS_PER_DAY, DT_BIN_DAYS
-from simulator.sde_solver_diffrax import solve_sde_jax
+from smc2fc.simulator.sde_solver_diffrax import solve_sde_jax
 from models.fsa_high_res._dynamics import TRUTH_PARAMS, DEFAULT_INIT
 from models.fsa_high_res.simulation import circadian_jax
 

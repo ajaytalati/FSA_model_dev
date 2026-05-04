@@ -34,7 +34,7 @@ everything except `drift` and `make_aux`.
 import math
 import numpy as np
 
-from simulator.sde_model import (
+from smc2fc.simulator.sde_model import (
     SDEModel, StateSpec, ChannelSpec,
     DIFFUSION_DIAGONAL_STATE,
 )

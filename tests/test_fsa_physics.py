@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from models.fsa_high_res.simulation import HIGH_RES_FSA_V2_MODEL, BINS_PER_DAY, DT_BIN_DAYS
-from simulator.sde_solver_diffrax import solve_sde_jax
+from smc2fc.simulator.sde_solver_diffrax import solve_sde_jax
 
 def test_simulation_run():
     print("Running FSA-v2 simulation smoke test...")
