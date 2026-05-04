@@ -17,6 +17,26 @@ Dates are in `YYYY-MM-DD`; times are local (BST unless otherwise noted).
 
 ---
 
+## 2026-05-05
+
+### 00:01 BST — Phase 2 (v4 branch tests): obs-consistency-v5 + reconciliation-v5; 13/13 green
+- **Author:** Ajay Talati (per the approved plan)
+- **Assistant:** Claude Code (Opus 4.7, 1M context)
+- **Branch:** `claude/dev-sandbox-v4`
+- **Files added:**
+  - [tests/test_obs_consistency_v5.py](tests/test_obs_consistency_v5.py) — 6 pytest tests (one per v5 obs channel: HR, Stress, Steps, VolumeLoad, Sleep — plus a `HR_base` regression sweep). For each channel, the simulator's noise-free predicted mean (or Bernoulli prob for Sleep) must match the estimator's `obs_log_weight_fn` prediction at the same 6D state, params, and circadian C(t). The new VolumeLoad channel (5th channel introduced by v5) is exercised. The `sigma_S` name-collision documented in v5 guide §9.1 is handled correctly — `params['sigma_S']` is the stress-obs noise (~4.0), and the latent-S diffusion (~0.008) is read from `_dynamics.SIGMA_S_FROZEN` only.
+  - [tests/test_reconciliation_v5.py](tests/test_reconciliation_v5.py) — 2 pytest tests:
+    - `test_plant_and_estimator_share_drift_v5` — single-step Euler prediction must be bit-equivalent on both sides under the v5 6D bimodal-Phi model. The other agent's v5 implementation already routes both sides through `_dynamics.drift_jax` (single source of truth via `_drift_jax_canonical`) — this test pins that contract so any future refactor that inlines a copy is caught immediately. Diff < 1e-10.
+    - `test_plant_advance_smoke_v5` — drives `StepwisePlant.advance(1 bin)` end-to-end with bimodal `Phi=(0.30, 0.30)` and confirms 6D state stays in physical bounds (B/S ∈ [0,1], F/A/K_FB/K_FS ≥ 0) and the output dict contains all 5 obs channels (`obs_HR`, `obs_sleep`, `obs_stress`, `obs_steps`, `obs_volumeload`) + `Phi` + `C`.
+- **Why:** These are the structural protection layers identified in the parent CLAUDE.md's MPC dependency chain note. The other agent's existing `tests/test_fsa_v5_smoke.py` covers the API-level "does it run" checks; this branch adds the bit-equivalence checks that would catch any future sim/estimator drift on the v5 6D model. The VolumeLoad channel is structurally most vulnerable to a SWAT-D1/D2 type bug (it's new, and has no intercept term so any silent-coefficient drop is harder to spot from output-mean ranges).
+- **Verified by:**
+  - `cd /tmp && pytest /home/ajay/Repos/FSA_model_dev/tests/ -v` (no PYTHONPATH, outside the repo dir) → **13/13 passed in 10.9 s**:
+    - 1 pre-existing v4 physics, 4 pre-existing v5 smoke (other agent's), 6 new v5 obs-consistency, 2 new v5 reconciliation.
+  - During development I caught a real bug in MY test (used the wrong key `'obs_VL'` vs the plant's actual key `'obs_volumeload'`) — the test failed loudly with a clean message naming the missing key, exactly the regression-net behaviour the structural tests are supposed to deliver.
+  - The v5 sim and estimator implement IDENTICAL formulas across all 5 channels (verified by reading the code on both sides). No D1/D2-equivalent asymmetries detected.
+
+---
+
 ## 2026-05-04
 
 ### 23:53 BST — Phase 1 (v4 branch): install metadata + drop bundled smc2fc/simulator stubs
