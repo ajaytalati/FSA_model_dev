@@ -1,6 +1,7 @@
 # FSA dev sandbox — v4/v5 branch port (Phase 6 of the original plan)
 
 > Archived from plan mode: 2026-05-04 23:53.
+> Updated: 2026-05-05 00:05 — Phases 1, 2, 4, 7 complete on `claude/dev-sandbox-v4`. Branch pushed to github (3 commits: a1f0638, 8feb8d2, 5f91785). 13/13 pytest green (1 v4 physics + 4 v5 smoke + 6 obs-consistency-v5 + 2 reconciliation-v5). Parent project CLAUDE.md gained an "FSA dev sandbox" subsection with the v5 dependency chain + sigma_S name-collision warning. Phase 3 (plant regression scenarios from v5 guide §8) and the export-to-framework orchestrator deferred to a follow-up — the v5 smoke + obs-consistency + reconciliation layer already protects the load-bearing path; scenarios + bundle exporter are nice-to-have on top.
 > This is the v4-branch-specific execution of the original plan
 > (whose master archive is the equivalent file already on
 > `claude/dev-sandbox-main`). Phase 6 was deferred from the earlier
