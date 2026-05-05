@@ -605,48 +605,104 @@ over both parameters and trajectories, can naturally reject or
 re-weight $\theta$-particles whose simulated trajectories violate the
 constraint at the prescribed rate.
 
-\subsection{Reference implementation: \texttt{evaluate\_chance\_constrained\_cost}}
+\subsection{Reference implementations: hard / soft variants}
 
-The function \path{models/fsa_high_res/control_v5.py:evaluate_chance_constrained_cost}
-provides the reference cost evaluator. Its signature:
+The chance-constraint cost is implemented as \emph{two interchangeable
+JIT-friendly variants} in \path{models/fsa_high_res/control_v5.py},
+plus a back-compat alias and a legacy NumPy reference. The smc2fc
+controller picks one variant based on its outer-loop architecture.
+
+\paragraph{Hard variant — for pure SMC\textsuperscript{2} architectures.}
+\texttt{evaluate\_chance\_constrained\_cost\_hard(...)} uses the
+indicator $\mathbb{1}[A_t < A_{\rm sep}(\Phi_t)]$ directly. Suitable
+when the controller's outer loop weights $\theta$-particles by their
+empirical violation rate at each tempering step. The hard indicator
+is non-differentiable in $\theta$, so this variant is NOT for HMC inner
+kernels. The full implementation is JIT-compiled and \texttt{vmap}-ed
+over particles. Per-bin separatrix root-finding is a JAX bisection over
+a 64-point grid — no \texttt{scipy.optimize.brentq}, no Python loops.
+
+\paragraph{Soft variant — for HMC architectures.}
+\texttt{evaluate\_chance\_constrained\_cost\_soft(...)} replaces the
+indicator with a sigmoid surrogate:
+\begin{equation}
+\mathbb{1}[A_t < A_{\rm sep}(\Phi_t)] \;\longrightarrow\;
+\sigma\!\left(\beta \cdot \frac{A_{\rm sep}(\Phi_t) - A_t}{\rm scale}\right),
+\label{eq:soft-surrogate}
+\end{equation}
+which is $C^\infty$ and differentiable through $\theta$ via the trajectory
+$A_t$. As $\beta \to \infty$ the surrogate converges to the hard
+indicator (the smoke test verifies this within $10^{-3}$ at $\beta =
+10^4$). Recommended use: anneal $\beta$ upward over the inference run
+— small $\beta$ early on for smooth easy gradients, large $\beta$ later
+for structural correctness. Default $\beta = 50$, $\text{scale} = 0.1$
+(units of $A$).
+
+\paragraph{Common signature.}
 
 \begin{lstlisting}
-def evaluate_chance_constrained_cost(
-    theta_particles,           # list of param dicts, OR (n_particles, theta_dim) ndarray
-    weights,                   # (n_particles,), sums to 1
-    Phi_schedule,              # (n_steps, 2)
+def evaluate_chance_constrained_cost_hard(
+    theta_particles,        # list of param dicts, OR dict-of-arrays (n_particles,)
+    weights,                # (n_particles,), normalised to sum to 1
+    Phi_schedule,           # (n_steps, 2)
     *,
-    dt: float = 1.0 / 96,      # 15-min bins, matches FSA_STEP_MINUTES=15
-    alpha: float = 0.05,       # chance-constraint budget
-    A_target: float = 2.0,     # min E[ integral A dt ]
-    truth_params_template: dict | None = None,
-    initial_state=None,        # (6,)
+    dt: float = 1.0 / 96,   # 15-min bins (FSA_STEP_MINUTES = 15)
+    alpha: float = 0.05,    # chance-constraint budget
+    A_target: float = 2.0,  # min E[ integral A dt ]
+    truth_params_template=None,    # default TRUTH_PARAMS_V5
+    initial_state=None,            # (6,) - default = trained athlete
 ) -> dict:
-    """
-    Returns:
-      mean_effort                  -- integral ||Phi||^2 dt  (deterministic in Phi)
-      mean_A_integral              -- weighted-mean integral A_t dt
-      violation_rate_per_particle  -- (n_particles,) fraction of bins where A_t < A_sep
-      weighted_violation_rate      -- single scalar
-      satisfies_chance_constraint  -- bool: weighted rate <= alpha
-      satisfies_target             -- bool: mean_A_integral >= A_target
-      A_sep_per_bin                -- (n_steps,) analytical separatrix curve
-    """
+    # Returns:
+    #   mean_effort                  scalar - integral ||Phi||^2 dt
+    #   mean_A_integral              scalar - weighted-mean integral A_t dt
+    #   violation_rate_per_particle  (n_particles,)
+    #   weighted_violation_rate      scalar
+    #   satisfies_chance_constraint  bool   - weighted rate <= alpha
+    #   satisfies_target             bool   - mean_A_integral >= A_target
+    #   A_sep_per_bin                (n_steps,) - analytical separatrix curve
 \end{lstlisting}
 
-The smc2fc outer loop is responsible for closing the loop:
+The soft variant has two extra kwargs, \texttt{beta} (default 50) and
+\texttt{scale} (default 0.1); the rest of the signature is identical.
+
+\paragraph{Back-compat alias.}
+The original symbol
+\texttt{evaluate\_chance\_constrained\_cost} is preserved as an alias
+for the hard variant, so existing imports from this module continue to
+work unchanged. The slow legacy NumPy implementation lives at
+\texttt{\_evaluate\_chance\_constrained\_cost\_legacy} and is kept only
+as a debug / readability reference; production callers should use the
+hard or soft variants.
+
+\paragraph{Architecture choice for the smc2fc port.}
+The decision tree for the smc2fc controller author:
+\begin{itemize}
+  \item Outer loop is \emph{pure SMC\textsuperscript{2} with importance
+        weighting} — particles are re-weighted at each tempering step
+        by their per-particle violation rate, no inner gradient kernel.
+        Use \textbf{hard} variant.
+  \item Outer loop has \emph{HMC} (or any gradient-based optimiser)
+        inside the SMC tempering — needs $\nabla_\theta J$. Use
+        \textbf{soft} variant; anneal $\beta$ from $\sim 10$ at the
+        first temperature to $\sim 10^3$ near convergence.
+  \item Need a back-compat baseline for unit tests against the v3 cost
+        functional — use \texttt{build\_control\_spec\_v5}
+        (gradient-OT) only as a fallback.
+\end{itemize}
+
+The smc2fc controller is responsible for closing the loop:
 re-weighting, rejecting, or scoring candidate $\Phi$ schedules using
-these returned quantities. This file does not own the controller; it
-provides only the cost evaluator.
+the dict returned from either variant. This file does not own the
+controller; it provides only the cost evaluators.
 
 \subsection{Engineering note: deterministic CRN}
 
-The reference implementation forward-simulates each particle
-deterministically (no per-particle noise) for speed. The chance
-constraint then captures parameter uncertainty, not state-noise
+Both variants forward-simulate each particle deterministically (no
+per-particle noise) for speed and reproducibility. The chance
+constraint then captures \emph{parameter uncertainty}, not state-noise
 uncertainty. To upgrade to full stochastic simulation, replace the
 internal helper \texttt{\_make\_forward\_rollout\_fn} with a CRN-noise
-variant; the rest of the cost function logic is unchanged.
+variant — every other piece of the cost function logic is unchanged.
 
 \subsection{Bonus formulation: Lagrangian relaxation}
 
@@ -661,7 +717,9 @@ soft penalty:
 where $\widehat p_{\rm violate}$ is the empirical violation rate from
 the particle cloud and $\lambda_{\rm chance}$ is a large penalty
 weight. This loses the chance-constraint guarantee but yields a smooth
-objective amenable to gradient methods.
+objective amenable to gradient methods. Equivalent to using the soft
+variant with $\beta \to 0$ (very loose surrogate) plus an explicit
+violation-rate penalty.
 
 
 % =============================================================================
