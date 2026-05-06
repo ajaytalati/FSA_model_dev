@@ -1,0 +1,442 @@
+\documentclass[11pt,a4paper]{article}
+\input{preamble.tex}
+
+\title{A LEAN4-First Charter for FSA Model Development\\
+  \large Post-mortem of the FSA-v5 import, and a process change\\
+  designed to make agent pattern-matching errors\\
+  syntactically impossible}
+\author{Ajay Talati \quad+\quad Claude (post-mortem author)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document is both a post-mortem and a charter. The post-mortem
+records the failure mode that made the FSA-v5 implementation and its
+import into the \texttt{smc2fc} framework a multi-day, expensive
+process: \emph{LLM coding agents pattern-match on variable names
+instead of building a semantic model of types, roles, dimensions,
+and pipeline position}. The charter prescribes the structural fix:
+LEAN4 as the formal source of truth for every mathematical model
+the project develops, with Python as a secondary, differentially-
+tested artefact. The work itself is translation, not research: the
+LaTeX equations already exist; the LEAN4 transcription of the FSA-v5
+model is roughly one day's work for a competent human developer.
+This document exists so that no future iteration relitigates the
+question.
+\end{abstract}
+
+\section{The problem in one paragraph}
+
+The current FSA development cycle is: write the mathematical model
+in LaTeX; ask an agent to port it to Python; spend days hunting bugs
+the agent introduced; eventually ship, often with errata documented
+post-deployment. The bottleneck is \emph{agent pattern-matching}, not
+modelling complexity. A junior human collaborator with the same LaTeX
+source would not make the same class of mistake, because they would
+read the equations, internalise that $\theta_{\rm ctrl} \in
+\mathbb{R}^{16}$ and $\theta_{\rm dyn} \in \mathbb{R}^{37}$ are
+different objects, and refuse to compare them as scalar intervals.
+LLM agents reach for the strongest training association of the name
+\texttt{theta} and write the most-likely-looking code. The fix has
+to be structural --- something that makes the wrong code refuse to
+compile --- not motivational.
+
+The audience for this document is two-fold: (a) the user, as a
+personal accountability artefact recording why the LEAN4-first
+process is being adopted and at what point; and (b) every future
+Claude (or other LLM) coding agent that touches an FSA model, who
+must read this charter at session start and follow the process it
+prescribes.
+
+\section{Concrete evidence}
+\label{sec:evidence}
+
+This section anchors the post-mortem in named, citable incidents.
+No vague complaints; every claim has a file path or commit hash
+attached.
+
+\subsection{Variable-name collisions in the live code}
+\label{sec:evidence-collisions}
+
+The same identifier \texttt{theta} refers to two fundamentally
+different mathematical objects in two parts of the codebase, and
+each carries a different dimension, role, and domain.
+
+\paragraph{(a) \texttt{theta} as 16-D RBF schedule coefficients
+(controller decision variable).} In
+\path{models/fsa_high_res/control.py}, lines 61--65:
+\begin{lstlisting}[language=Python]
+def schedule_from_theta(theta: jnp.ndarray) -> jnp.ndarray:
+    theta_B = theta[:n_anchors]
+    theta_S = theta[n_anchors:]
+    raw_B = c_Phi + jnp.einsum('a,ta->t', theta_B, Phi_design)
+\end{lstlisting}
+Here \texttt{theta} is a length-16 vector ($2 \times n_{\rm anchors}$,
+with $n_{\rm anchors} = 8$), interpreted as RBF basis coefficients
+that, after a sigmoid envelope, parameterise the dual-channel
+control schedule $\Phi(t)$. It is the controller's
+\emph{decision variable}. It lives in $\mathbb{R}^{16}$. Its prior
+breadth is the scalar \texttt{sigma\_prior} in
+\path{smc2fc/control/config.py:28}.
+
+\paragraph{(b) \texttt{theta} as 37-D dynamics-parameter posterior
+(SMC$^2$ inference target).} In
+\path{models/fsa_high_res/estimation.py}, the function
+\verb|get_init_theta()| at line 513--520:
+\begin{lstlisting}[language=Python]
+def get_init_theta():
+    """Return prior-mode parameter vector (length = len(PARAM_PRIOR_CONFIG))."""
+    return np.array([_mode(pt, pa) for _, (pt, pa)
+                     in PARAM_PRIOR_CONFIG.items()],
+                    dtype=np.float32)
+\end{lstlisting}
+Here \texttt{theta} is a length-37 vector of physiological
+parameters --- rate constants, amplitudes, decay times, observation
+noise scales --- whose posterior the SMC$^2$ machinery infers from
+data. It is the inference \emph{target}, not a decision variable.
+It lives in $\mathbb{R}^{37}$. Its prior is component-wise
+log-normal, not Gaussian; the prior breadth varies per parameter.
+
+\paragraph{Why this matters.} An agent reading either file sees
+\texttt{theta}, a flat numpy array, and reaches for "Gaussian prior
+on $\theta$" --- which is correct in case (a) and wrong in case
+(b). An agent reasoning across files conflates the two and treats
+"the prior on $\theta$" as a single concept with a single dimension
+and a single breadth. There is no warning sign in the Python code
+itself; the type is just \texttt{jnp.ndarray} in both places.
+
+\subsection{The Bug 5 incident}
+\label{sec:bug5}
+
+The named incident that motivated this charter, recorded verbatim
+from the user's feedback memory at
+\path{~/.claude/projects/.../memory/feedback_no_fabricated_bugs.md}:
+
+\begin{quote}\itshape
+During the FSA-v5 verification session on 2026-05-06 I logged a
+``Bug 5'' that claimed $\theta \in [-0.4, +0.5]$ for the controller's
+RBF schedule prior to keep the system in the healthy island.
+$\theta$ is a 16-dim vector (RBF coefficients across both Phi
+channels and \texttt{n\_anchors=8} anchors). The healthy island is a
+2D region in $(\Phi_B, \Phi_S)$ \textbf{control output space}, not in
+$\theta$ space. Comparing them as scalar intervals is incoherent. I
+conflated:
+\begin{itemize}
+\item SMC$^2$ parameter posterior $\theta$ (37-dim, the inferred
+  parameters)
+\item Controller RBF schedule $\theta$ (16-dim, the decision
+  variables)
+\end{itemize}
+both of which use \texttt{sigma\_prior} in the bench code, mentally
+collapsed to a single scalar. The bench code in front of me had
+\texttt{theta\_B = theta[:n\_anchors]} --- explicit vector indexing
+--- and I didn't internalize it.
+\end{quote}
+
+The agent in question was me. The user's verdict was ``stupid
+mistake''; the request was for guardrails. This document is the
+guardrail.
+
+\subsection{Plan churn in \texttt{claude\_plans/}}
+\label{sec:plan-churn}
+
+The repository's \path{claude_plans/} directory accumulates one
+markdown file per plan-mode session. The CLAUDE.md convention is
+that meaningful updates to a plan add a \verb|> Updated:| audit
+line below the title. As of this writing the directory contains
+eight plan files, of which \emph{seven have zero \texttt{Updated:}
+lines} --- they were drafted, never executed, never closed:
+
+\begin{itemize}\small
+  \item \path{FSA_v5_Implementation_Plan_for_the_fsa_high_res_Folder_2026-05-04_2238.md} (0 updates).
+  \item \path{Lyapunov_Stability_Analysis_for_FSA_v4_Plan_2026-05-04_1448.md} (0 updates).
+  \item \path{Ajays Notes Plan to update to version 5.md} (0 updates).
+  \item \path{Advice_on_smc2fc_Port_Cost_Function_Architecture_2026-05-05_1055.md} (0 updates --- advice-only, never tied to a closed task).
+  \item \path{Techical documentation plan - FSA_version_5_technical_guide tex.md} (0 updates).
+  \item \path{Ajays Notes - 1.md}, \path{Ajays Notes - 2.md} (0 updates).
+\end{itemize}
+
+The single plan that did execute is
+\path{FSA_dev_sandbox_mirror_the_SWAT_model_dev_pattern_v4_branch_2026-05-04_2353.md}
+(1 update line, 13/13 tests green at completion). The ratio of
+abandoned to executed plans (7:1) is not a sign of laziness; it is
+a sign that planning sessions repeatedly re-derive the same
+mathematical model in slightly-different shapes because no formal
+artefact pins the model down.
+
+\subsection{Errata after deploy}
+\label{sec:errata}
+
+Commit \texttt{d886f36} on the v4 branch:
+\begin{quote}\itshape
+docs: add FSA-v4 errata, open-loop limitation, and SMC$^2$ vs OT
+comparison.
+
+Documents the gap between the §4 narrative and the actual behaviour
+of \texttt{tools/optimize\_dynamic\_plan\_v4.py}, then frames smc2fc
+as the structural remedy.
+\end{quote}
+A documentation-correction commit recording bugs caught
+\emph{after} deployment, not during development. The fact that
+errata was needed at all is the evidence that the in-development
+verification was not strong enough; it does not matter how many
+tests pass on the final commit if the bugs are documented in a
+follow-up commit instead of caught at the place they were
+introduced.
+
+\section{Root-cause analysis}
+\label{sec:rca}
+
+\paragraph{LLMs are surface pattern-matchers.} They read source
+code primarily as text, not as a typed graph of objects with
+roles. When an agent sees \texttt{theta}, the most-trained
+association fires; the surrounding context is treated as
+secondary. This is not a defect of any particular model; it is the
+structural consequence of how the system is built. Asking an agent
+to ``be more careful'' is asking it to override its own training
+prior every time --- which empirically does not happen reliably,
+as §\ref{sec:bug5} demonstrates.
+
+\paragraph{Python provides no formal scaffolding to compensate.}
+\texttt{jnp.ndarray} is the type of both the 16-D control
+coefficient vector and the 37-D parameter posterior. There is no
+shape-aware static analyser running in the loop, no role tagging
+in the type system, no proof obligation attached to a function
+signature that the inputs satisfy any pre-condition. The senior
+engineer (the user) ends up as the only line of defence, and the
+£££ in tokens is the cost of the user catching agent errors after
+the fact.
+
+\paragraph{Why ``tell agents to be more careful'' doesn't work.}
+The user's feedback memory at \path{feedback_no_fabricated_bugs.md}
+encodes a PRIMARY RULE --- \emph{build a semantic model BEFORE any
+claim} --- which is correct as a principle but unenforceable as a
+process. The rule depends on the agent \emph{choosing} to think
+rather than pattern-match. §\ref{sec:bug5} is the empirical proof
+that the choice is not reliably made. Every agent session is one
+roll of the dice on whether the rule fires that day.
+
+\section{The structural fix: LEAN4 as the source of truth}
+\label{sec:fix}
+
+\subsection{Dependent types make the collision a compile error}
+
+A LEAN4 function with the signature
+\[
+\texttt{evaluateCost} : \texttt{RBFCoeffs}\;16 \to \mathbb{R}
+\]
+syntactically refuses any value not of the exact type
+\texttt{RBFCoeffs 16}. The 37-dimensional parameter posterior
+$\theta_{\rm dyn} : \texttt{ParameterVector}\;37$ is a different
+type, and \texttt{lake build} will reject any code that conflates
+them. Pattern-matching on names becomes harmless because the type
+system catches the consequence at compile time, before any
+incoherent reasoning reaches the user.
+
+The two-dimensional output region $(\Phi_B, \Phi_S)$ from
+§\ref{sec:bug5} would, in LEAN4, have a type like
+\texttt{ControlOutput} that is \emph{not} the type of any prior on
+$\theta$. Writing $\theta \in [-0.4, +0.5]$ would not compile, full
+stop, because the right-hand side is a scalar interval and the
+left-hand side is a vector. The agent could not have made the
+mistake.
+
+\subsection{LEAN4 is also a programming language}
+
+LEAN4 compiles to native code via C. \texttt{lake build} produces
+a binary; a thin Python \texttt{ctypes} wrapper exposes each
+verified function as a Python callable. The same LEAN4 file is
+both the formal specification and the executable reference
+implementation. There is no ``the spec drifted from the code''
+failure mode because the spec \emph{is} the code.
+
+\subsection{mathlib already has the infrastructure}
+
+The mathematical objects FSA-v5 needs ---
+finite-dimensional real vector spaces, matrix operations,
+exponentials and logarithms, Hill functions, sigmoids,
+piecewise-linear schedule decoders, ODE integration --- are all
+already library imports in \texttt{mathlib}. There is no novel
+mathematics to formalise. Transcribing the FSA-v5 LaTeX into LEAN4
+is genuinely just translation.
+
+\subsection{What this does not solve}
+
+\begin{itemize}
+\item \emph{Floating-point semantics.} The gap between the LEAN4
+  notion of $\mathbb{R}$ and IEEE-754 double-precision arithmetic
+  is real and not addressed by this charter; it is bounded by the
+  tolerance threshold in the differential test (§\ref{sec:process}
+  step 6).
+\item \emph{GPU correctness.} The differential test runs the
+  Python implementation on whatever backend it normally uses
+  (JAX/XLA, GPU); the LEAN4 binary is CPU-only. Disagreements
+  driven by GPU-specific behaviour are out of scope and trusted
+  as before.
+\item \emph{The transcription itself.} If the LaTeX$\to$LEAN4
+  transcription is wrong, both the LEAN4 reference and (likely)
+  the agent-written Python will be wrong in the same way. This is
+  why the LaTeX$\to$LEAN4 step is human-reviewed line-by-line; it
+  is the one place reviewer attention has to land.
+\end{itemize}
+
+\section{The new development process}
+\label{sec:process}
+
+The standing rule going forward, and the charter every future
+agent must follow:
+
+\begin{quote}\bfseries
+For every new mathematical model, every model extension, and every
+import into \texttt{smc2fc}, the LEAN4 specification is written
+before any Python implementation. The LEAN4 native binary is the
+authoritative reference. Python is differentially tested against
+it. Disagreement beyond a tolerance threshold is by construction a
+Python bug.
+\end{quote}
+
+Per function, the workflow is:
+
+\begin{enumerate}
+\item \textbf{LaTeX equations (as today).} Drift, diffusion, cost,
+  plant, schedule decoder, observation model --- written in
+  \path{LaTex_docs/sections/} using the existing notation
+  conventions.
+\item \textbf{LEAN4 transcription.} A new \path{lean/} directory in
+  the repo. The LaTeX equations are transcribed into LEAN4
+  \emph{definitions} (typed, with dimensions encoded in the type)
+  and \emph{implementations} (runnable code). Line-by-line,
+  side-by-side with the LaTeX. Straight translation, no design
+  work, no novel mathematics.
+\item \textbf{LEAN4 native compilation.} \texttt{lake build}
+  produces a native binary. A Python \texttt{ctypes} wrapper in
+  \path{lean/python_bridge/} exposes each function as a Python
+  callable.
+\item \textbf{Python implementation (agent-written, fast path).}
+  The agent writes the JAX/Python implementation as today,
+  optimised for GPU. The agent is permitted to pattern-match;
+  step 6 catches the consequences.
+\item \textbf{(Optional) property proofs.} Lipschitz, basin-of-
+  attraction theorems, monotonicity --- the kind of statement that
+  makes the LEAN4 spec a \emph{proof} not just a typed transcription.
+  Defer unless a specific incident motivates one. The charter does
+  not gate on these.
+\item \textbf{Differential testing.} A \texttt{pytest} harness using
+  \texttt{hypothesis} for random-input generation evaluates BOTH the
+  LEAN4 binary AND the Python implementation on a battery of inputs
+  sampled from the physiological-bound box. Any disagreement beyond
+  a tolerance threshold (default $10^{-6}$ in single-step drift,
+  $10^{-4}$ in integrated trajectory) is a Python bug.
+\item \textbf{\texttt{smc2fc} port.} The port is a thin shim from
+  the verified LEAN4 reference into the framework's
+  \texttt{EstimationModel} / \texttt{SDEModel} interfaces. The
+  shim is also differentially tested against the LEAN4 binary
+  before being merged.
+\end{enumerate}
+
+\section{Scope and timing}
+\label{sec:scope}
+
+\textbf{This is translation work, not research.} The LaTeX spec
+already exists; LEAN4 has the linear-algebra and ODE infrastructure;
+\texttt{mathlib} supplies the lemmas. The full FSA-v5 model is
+\textbf{one day's work for a competent human developer}. Any
+estimate quoting weeks per function is inflation; the user has
+explicitly rejected that framing and this document is bound by the
+rejection.
+
+\begin{center}\small
+\begin{tabular}{lll}
+\toprule
+Function & File & LEAN4 transcription \\
+\midrule
+FSA-v5 drift              & \path{models/fsa_high_res/_dynamics.py} & $\sim 2$ hours \\
+Cost (chance-constrained) & \path{models/fsa_high_res/control_v5.py} & $\sim 1.5$ hours \\
+StepwisePlant             & \path{models/fsa_high_res/_plant.py} & $\sim 1$ hour \\
+Schedule decoder (RBF)    & \path{models/fsa_high_res/control.py} & $\sim 30$ min \\
+Observation model         & (in \path{estimation.py}) & $\sim 1$ hour \\
+FFI wrapper + diff tests  & \path{lean/python_bridge/} & $\sim 2$ hours \\
+\midrule
+Total                     & --- & $\sim 8$ hours \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The LEAN4 source is roughly the same length as the LaTeX it
+transcribes. Most of the time goes into wiring up the FFI bridge
+and writing the differential-test harness; the math itself is
+direct.
+
+The cost/value frame: a single 8-hour LEAN4 transcription pass
+amortises across \emph{every future FSA version, every future model
+extension, and every future agent attempting a port to
+\texttt{smc2fc}}. The alternative --- paying for repeated agent
+rounds of pattern-match-then-hunt-bugs --- is what burned the £££
+this charter exists to stop.
+
+\section{What is and isn't covered}
+
+\paragraph{In scope.} Drift, cost, plant, schedule decoder,
+observation model. Typed LEAN4 reference implementations plus
+differential tests. The agent-written FSA-v5 surface in
+\path{models/fsa_high_res/} (2{,}200 Python LOC across 4 files;
+the LEAN4 transcription is much shorter).
+
+\paragraph{Out of scope (still trusted).} The SMC$^2$/PF framework
+code in \texttt{smc2fc/core/} and \texttt{smc2fc/filtering/} is
+already tested upstream and is not subject to this charter. HMC and
+NUTS internals, the JAX-native compile-once architecture, GPU
+correctness, and IEEE-754 floating-point semantics are likewise
+trusted as before.
+
+\paragraph{Trusted by transcription.} The LaTeX$\to$LEAN4 step is
+human-reviewed line-by-line. This is the one place reviewer
+attention has to land; the rest of the process is mechanical.
+
+\section{Audit checklist}
+\label{sec:checklist}
+
+A future agent runs this checklist at session start, before
+touching any FSA-related Python file:
+
+\begin{itemize}
+\item[$\square$] Is there a LEAN4 reference for the function I am
+  about to touch? \emph{If no:} the charter says I am not allowed
+  to write the Python until the LEAN4 reference exists. Stop and
+  flag.
+\item[$\square$] Does \texttt{lake build} succeed on the current
+  commit (the LEAN4 reference type-checks)?
+\item[$\square$] Does the Python differential test pass against
+  the LEAN4 binary on the current commit (\texttt{pytest
+  tests/test\_lean4\_diff.py} is green)?
+\item[$\square$] Have I written down --- in plain English ---
+  the type, role, and pipeline position of every variable I am
+  about to reason about? (Per the PRIMARY RULE in
+  \path{feedback_no_fabricated_bugs.md}.)
+\item[$\square$] If I am about to claim a bug: do I have a
+  reproducer (input $\to$ both implementations $\to$ disagreement
+  beyond the tolerance threshold)? \emph{If no:} it is not a bug,
+  it is an open question; record it as such and move on.
+\end{itemize}
+
+If any box is unchecked, the agent does not proceed. The session
+is paused; the user is notified; the missing artefact is produced
+before any code is changed.
+
+\section{Closing}
+
+The point of this document is accountability. The named incident
+in §\ref{sec:bug5} was caused by an agent (me) pattern-matching on
+\texttt{theta} across two architectural layers it does not unify.
+The cost was burned trust and burned time. The charter prescribed
+here makes that class of error structurally impossible: the
+LEAN4 type-checker is unforgiving, and disagreements between LEAN4
+and Python are by construction Python bugs.
+
+LEAN4 is never wrong about types. Python is. Agents pattern-match;
+LEAN4 does not. This charter is the bridge that makes the agent's
+limitations harmless.
+
+\end{document}
