@@ -81,7 +81,7 @@ PARAM_PRIOR_CONFIG = OrderedDict([
     ('k_F',         ('lognormal', (math.log(20.0), 0.20))),
     ('k_A_S',       ('lognormal', (math.log(8.0),  0.25))),
     ('beta_C_S',    ('normal',    (-4.0, 0.8))),
-    ('sigma_S',     ('lognormal', (math.log(4.0), 0.20))),
+    ('sigma_S_obs', ('lognormal', (math.log(4.0), 0.20))),
     ('mu_step0',    ('normal',    (5.5, 0.3))),
     ('beta_B_st',   ('lognormal', (math.log(0.8), 0.20))),
     ('beta_F_st',   ('lognormal', (math.log(0.5), 0.25))),
@@ -274,7 +274,7 @@ def observation_predictions(eta):
     p_sleep = jax.nn.sigmoid(z)
 
     sig_HR = jnp.full(N_OBS, p['sigma_HR'])
-    sig_S  = jnp.full(N_OBS, p['sigma_S'])
+    sig_S  = jnp.full(N_OBS, p['sigma_S_obs'])
     sig_st = jnp.full(N_OBS, p['sigma_st'])
     sig_VL = jnp.full(N_OBS, p['sigma_VL'])
     return jnp.concatenate([mu_HR, sig_HR, mu_S, sig_S, mu_st, sig_st,
